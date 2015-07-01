@@ -436,7 +436,7 @@ int main(void)
     seL4_BootInfo *info = seL4_GetBootInfo();
 
 #ifdef SEL4_DEBUG_KERNEL
-    seL4_DebugNameThread(seL4_CapInitThreadTCB, "sel4test-driver");
+    seL4_DebugNameThread(seL4_CapInitThreadTCB, "helloworld");
 #endif
 
     compile_time_assert(init_data_fits_in_ipc_buffer, sizeof(test_init_data_t) < PAGE_SIZE_4K);
@@ -458,8 +458,12 @@ int main(void)
      * before starting the tests */
     printf("Switching to a safer, bigger stack... ");
     fflush(stdout);
-    int res = (int)sel4utils_run_on_stack(&env.vspace, main_continued, NULL);
-    test_assert_fatal(res == 0);
+    // int res = (int)sel4utils_run_on_stack(&env.vspace, main_continued, NULL);
+    // test_assert_fatal(res == 0);
+
+    simple_print(&env.simple);
+    printf("\n\n>>>>>>>>>> Hello World <<<<<<<<<< \n\n");
+    fflush(stdout);
 
     return 0;
 }
