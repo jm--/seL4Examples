@@ -33,6 +33,21 @@ simulate-ia32:
 		-m 512 -nographic -kernel images/kernel-ia32-pc99 \
 		-initrd images/sel4test-driver-image-ia32-pc99
 
+run-nographics:
+	qemu-system-i386 \
+		-m 512 -nographic -kernel images/kernel-ia32-pc99 \
+		-initrd images/$(apps)-image-ia32-pc99
+
+run:
+	qemu-system-i386 \
+		-m 512 -serial stdio -kernel images/kernel-ia32-pc99 \
+		-initrd images/$(apps)-image-ia32-pc99 
+
+
+#run:	cdrom.iso
+#	$(QEMU) -m 32 -serial stdio -cdrom cdrom.iso
+
+
 .PHONY: help
 help:
 	@echo "sel4test - unit and regression tests for seL4"
