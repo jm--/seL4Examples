@@ -24,6 +24,7 @@ menu "seL4 Applications"
     source "apps/sel4test-driver/Kconfig"
     source "apps/sel4test-tests/Kconfig"
     source "apps/helloworld/Kconfig"
+    source "apps/keyboard/Kconfig"
 endmenu
 
 menu "seL4 Libraries"

@@ -454,7 +454,7 @@ int main(void)
     seL4_BootInfo *info = seL4_GetBootInfo();
 
 #ifdef SEL4_DEBUG_KERNEL
-    seL4_DebugNameThread(seL4_CapInitThreadTCB, "helloworld");
+    seL4_DebugNameThread(seL4_CapInitThreadTCB, "keyboard");
 #endif
 
     compile_time_assert(init_data_fits_in_ipc_buffer, sizeof(test_init_data_t) < PAGE_SIZE_4K);
@@ -480,7 +480,7 @@ int main(void)
     // test_assert_fatal(res == 0);
 
     simple_print(&env.simple);
-    printf("\n\n>>>>>>>>>> Hello World <<<<<<<<<< \n\n");
+    printf("\n\n>>>>>>>>>> Keyboard Test<<<<<<<<<< \n\n");
     fflush(stdout);
 
     return 0;
