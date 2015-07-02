@@ -29,3 +29,6 @@ endif
 #
 #helloworld: export COMPONENTS=${helloworld-components}
 #helloworld: ${helloworld-components-y} kernel_elf $(helloworld-y)
+
+#prerequisites
+helloworld: kernel_elf $(helloworld-y)
