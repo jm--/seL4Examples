@@ -495,7 +495,7 @@ struct conserv_state {
 
     //#ifdef PLAT_PC99
     ps_chardevice_t devKeyboard;
-    bool keyboardEnabled;
+    //bool keyboardEnabled;
     //#endif
 
     //seL4_CPtr serialBadgeEP;
@@ -645,8 +645,8 @@ int main(int argc, char *argv[])
 
     /* switch to a bigger, safer stack with a guard page
      * before starting the tests */
-    printf("Switching to a safer, bigger stack... ");
-    fflush(stdout);
+    //printf("Switching to a safer, bigger stack... ");
+    //fflush(stdout);
     // int res = (int)sel4utils_run_on_stack(&env.vspace, main_continued, NULL);
     // test_assert_fatal(res == 0);
 
@@ -668,6 +668,7 @@ int main(int argc, char *argv[])
     //sel4platsupport_get_io_port_ops(&conServ.devIO, env.simple);
 
     struct ps_io_ops    opsIO;
+    //opsIO.io_mapper =
     //ps_io_port_ops_t    ops;
     sel4platsupport_get_io_port_ops(&opsIO.io_port_ops, &env.simple);
     //ps_io_port_ops_t
@@ -676,22 +677,24 @@ int main(int argc, char *argv[])
 
     //devio_init(&conServ.devIO);
     /* Set up keyboard device. */
-    //#if defined(CONFIG_PLAT_PC99) && defined(CONFIG_REFOS_ENABLE_KEYBOARD)
     ps_chardevice_t *devKeyboardRet;
     printf("ps_cdev_init keyboard...\n");
     //devKeyboardRet = ps_cdev_init(PC99_KEYBOARD_PS2, &conServ.devIO.opsIO, &conServ.devKeyboard);
     devKeyboardRet = ps_cdev_init(PC99_KEYBOARD_PS2, &opsIO, &conServ.devKeyboard);
     if (!devKeyboardRet || devKeyboardRet != &conServ.devKeyboard) {
         printf("ERROR: could not initialize keyboard device.\n");
-        assert(!"conserv_init failed.");
+        assert(!"ps_cdev_init failed.");
         exit(1);
     }
-    conServ.keyboardEnabled = true;
-   // #endif
-
-
-    fflush(stdout);
-
+    for(;;) {
+        int count;
+        char data;
+        count = conServ.devKeyboard.read(&conServ.devKeyboard, &data, 1, NULL, NULL);
+        if (count == 1) {
+          printf ("char: %c\n", data);
+        }
+        fflush(stdout);
+    }
     return 0;
 }
 
