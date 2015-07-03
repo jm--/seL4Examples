@@ -116,6 +116,7 @@ init_env(env_t env)
     assert(allocman);
 
     /* create a vka (interface for interacting with the underlying allocator) */
+    //sets: vka->data = allocman and a bunch of fun pointers;
     allocman_make_vka(&env->vka, allocman);
 
     /* create a vspace (virtual memory management interface). We pass
@@ -443,6 +444,9 @@ int main(void)
     /* initialise libsel4simple, which abstracts away which kernel version
      * we are running on */
 #ifdef CONFIG_KERNEL_STABLE
+    //assign:  simple->data = info;
+    // and a bunch of function pointers, e.g: simple->print = &simple_stable_print;
+    //usage example: simple_print(&env.simple);
     simple_stable_init_bootinfo(&env.simple, info);
 #else
     simple_default_init_bootinfo(&env.simple, info);
