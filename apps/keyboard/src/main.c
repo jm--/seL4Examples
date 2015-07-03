@@ -16,14 +16,20 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <arch_stdio.h>
 
 #include <allocman/bootstrap.h>
 #include <allocman/vka.h>
 
 #include <platsupport/timer.h>
 
+
+
+
 #include <sel4platsupport/platsupport.h>
 #include <sel4platsupport/plat/timer.h>
+#include <sel4platsupport/arch/io.h> //jm
+
 #include <sel4utils/vspace.h>
 #include <sel4utils/stack.h>
 #include <sel4utils/process.h>
@@ -449,7 +455,167 @@ void *main_continued(void *arg UNUSED)
     return NULL;
 }
 
-int main(void)
+//=============================================================================
+//=============================================================================
+//=============================================================================
+
+#define PLAT_PC99   1
+
+
+#define DEVICE_IO_TABLE_MAGIC 0x1C62D6B2
+#define DEVICE_IO_DEV_MAPPING_MAGIC 0x57545A05
+
+/* ------------------------------ Reserved CSpace caps ---------------------*/
+//
+//#define REFOS_CSPACE               0x2
+//#define REFOS_PROCSERV_EP          0x3
+//#define REFOS_LIVENESS             0x4
+//#define REFOS_CSPACE_RECV_TEMPSWAP 0x5
+//#define REFOS_THREAD_CAP_RECV      0x6
+//#define REFOS_THREAD_TCB           0x8
+#define REFOS_DEVICE_IO_PORTS      0x9
+
+/*! @brief Global Device IO state structure. */
+typedef struct dev_io_ops {
+    struct ps_io_ops opsIO;
+    //chash_t MMIOMappings; /*!< vaddr --> data_mapping_t */
+    seL4_CPtr IOPorts;
+    uint32_t magic;
+} dev_io_ops_t;
+
+struct conserv_state {
+    //srv_common_t commonState;
+    //dev_irq_state_t irqState;
+
+    /* Main console server data structures. */
+    dev_io_ops_t devIO;
+    //ps_chardevice_t devSerial;
+    //struct input_state devInput;
+    //struct device_screen_state devScreen;
+
+    //#ifdef PLAT_PC99
+    ps_chardevice_t devKeyboard;
+    bool keyboardEnabled;
+    //#endif
+
+    //seL4_CPtr serialBadgeEP;
+    //seL4_CPtr screenBadgeEP;
+};
+struct conserv_state conServ;
+
+/* --------------------------------------- Device IO Ports -------------------------------------- */
+
+static int
+dev_io_port_in(void* cookie, uint32_t port, int io_size, uint32_t *result)
+{
+    dev_io_ops_t *io = (dev_io_ops_t *) cookie;
+    assert(io && io->magic == DEVICE_IO_TABLE_MAGIC);
+    (void) io;
+
+#if defined(PLAT_PC99)
+    if (io->IOPorts) {
+        seL4_IA32_IOPort_In8_t res8;
+        seL4_IA32_IOPort_In16_t res16;
+        seL4_IA32_IOPort_In32_t res32;
+
+        res8.error = -1;
+        res16.error = -1;
+        res32.error = -1;
+
+        switch (io_size) {
+            case 1: /* 8 bits. */
+                res8 = seL4_IA32_IOPort_In8(io->IOPorts, port);
+                if (!res8.error && result != NULL) {
+                    (*result) = (uint32_t) res8.result;
+                }
+                return res8.error;
+            case 2: /* 16 bits. */
+                res16 = seL4_IA32_IOPort_In16(io->IOPorts, port);
+                if (!res16.error && result != NULL) {
+                    (*result) = (uint32_t) res16.result;
+                }
+                return res16.error;
+            case 4: /* 32 bits. */
+                res32 = seL4_IA32_IOPort_In32(io->IOPorts, port);
+                if (!res32.error && result != NULL) {
+                    (*result) = (uint32_t) res32.result;
+                }
+                return res32.error;
+        }
+    }
+#endif
+
+    return -1;
+}
+
+static int
+dev_io_port_out(void* cookie, uint32_t port, int io_size, uint32_t val)
+{
+    dev_io_ops_t *io = (dev_io_ops_t *) cookie;
+    assert(io && io->magic == DEVICE_IO_TABLE_MAGIC);
+    (void) io;
+
+#if defined(PLAT_PC99)
+    if (io->IOPorts) {
+        switch (io_size) {
+            case 1: /* 8 bits. */
+                seL4_IA32_IOPort_Out8(io->IOPorts, port, (uint8_t) val);
+                return 0;
+            case 2: /* 16 bits. */
+                seL4_IA32_IOPort_Out16(io->IOPorts, port, (uint16_t) val);
+                return 0;
+            case 4: /* 32 bits. */
+                seL4_IA32_IOPort_Out32(io->IOPorts, port, (uint32_t) val);
+                return 0;
+        }
+    }
+#endif
+
+    return -1;
+}
+
+
+
+void
+devio_init(dev_io_ops_t *io)
+{
+    assert(io);
+    memset(io, 0, sizeof(dev_io_ops_t));
+    io->magic = DEVICE_IO_TABLE_MAGIC;
+
+#if defined(PLAT_PC99)
+    io->IOPorts = REFOS_DEVICE_IO_PORTS;
+#endif
+
+//    /* Set the function pointers for the IO mapper. */
+//    ps_io_mapper_t *ioMapper = &io->opsIO.io_mapper;
+//    ioMapper->cookie = (void*) io;
+//    ioMapper->io_map_fn = dev_io_map;
+//    ioMapper->io_unmap_fn = dev_io_unmap;
+
+    /* Set the function pointers for the IO port operations. */
+    ps_io_port_ops_t *ioPorts = &io->opsIO.io_port_ops;
+    ioPorts->cookie = (void*) io;
+    ioPorts->io_port_in_fn = dev_io_port_in;
+    ioPorts->io_port_out_fn = dev_io_port_out;
+
+//    /* Set the function pointers for the DMA operations. */
+//    ps_dma_man_t *dmaManager = &io->opsIO.dma_manager;
+//    dmaManager->cookie = (void*) io;
+//    dmaManager->dma_alloc_fn = dev_dma_alloc;
+//    dmaManager->dma_free_fn = dev_dma_free;
+//    dmaManager->dma_pin_fn = dev_dma_pin;
+//    dmaManager->dma_unpin_fn = dev_dma_unpin;
+//    dmaManager->dma_cache_op_fn = dev_dma_cache_op;
+//
+//    /* Initialise MMIO mapping table. */
+//    chash_init(&io->MMIOMappings, DEVICE_MMIO_MAPPING_HASHTABLE_SIZE);
+}
+
+
+//=============================================================================
+//int main(void)
+int main(int argc, char *argv[])
 {
     seL4_BootInfo *info = seL4_GetBootInfo();
 
@@ -457,12 +623,17 @@ int main(void)
     seL4_DebugNameThread(seL4_CapInitThreadTCB, "keyboard");
 #endif
 
+    //a libutils macro
     compile_time_assert(init_data_fits_in_ipc_buffer, sizeof(test_init_data_t) < PAGE_SIZE_4K);
+
+
     /* initialise libsel4simple, which abstracts away which kernel version
      * we are running on */
 #ifdef CONFIG_KERNEL_STABLE
+    //experimental kernel
     simple_stable_init_bootinfo(&env.simple, info);
 #else
+    //master kernel (currently)
     simple_default_init_bootinfo(&env.simple, info);
 #endif
 
@@ -481,6 +652,44 @@ int main(void)
 
     simple_print(&env.simple);
     printf("\n\n>>>>>>>>>> Keyboard Test<<<<<<<<<< \n\n");
+    printf("%d %s\n", argc, argv[0]);	//from libsel4platsupport
+
+    //int c = getchar(); //not implemented
+    /*
+    __arch_putchar('A');
+    for (;;) {
+		int c =__arch_getchar();
+		if (c != EOF) {
+		__arch_putchar(c);
+		}
+    }
+    */
+    //sel4platsupport_get_io_port_ops(&io_ops.io_port_ops, simple);
+    //sel4platsupport_get_io_port_ops(&conServ.devIO, env.simple);
+
+    struct ps_io_ops    opsIO;
+    //ps_io_port_ops_t    ops;
+    sel4platsupport_get_io_port_ops(&opsIO.io_port_ops, &env.simple);
+    //ps_io_port_ops_t
+
+
+
+    //devio_init(&conServ.devIO);
+    /* Set up keyboard device. */
+    //#if defined(CONFIG_PLAT_PC99) && defined(CONFIG_REFOS_ENABLE_KEYBOARD)
+    ps_chardevice_t *devKeyboardRet;
+    printf("ps_cdev_init keyboard...\n");
+    //devKeyboardRet = ps_cdev_init(PC99_KEYBOARD_PS2, &conServ.devIO.opsIO, &conServ.devKeyboard);
+    devKeyboardRet = ps_cdev_init(PC99_KEYBOARD_PS2, &opsIO, &conServ.devKeyboard);
+    if (!devKeyboardRet || devKeyboardRet != &conServ.devKeyboard) {
+        printf("ERROR: could not initialize keyboard device.\n");
+        assert(!"conserv_init failed.");
+        exit(1);
+    }
+    conServ.keyboardEnabled = true;
+   // #endif
+
+
     fflush(stdout);
 
     return 0;
