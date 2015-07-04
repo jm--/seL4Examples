@@ -38,15 +38,16 @@ run-nographics:
 		-m 512 -nographic -kernel images/kernel-ia32-pc99 \
 		-initrd images/$(apps)-image-ia32-pc99
 
-run:
-	qemu-system-i386 \
+debug run:
+	qemu-system-i386 $(if $(subst run,,$@), -s -S) \
 		-m 512 -serial stdio -kernel images/kernel-ia32-pc99 \
 		-initrd images/$(apps)-image-ia32-pc99 
 
-
-#run:	cdrom.iso
-#	$(QEMU) -m 32 -serial stdio -cdrom cdrom.iso
-
+gdb:
+	gdb -ex 'file $(IMAGE_ROOT)/$(apps)-image-ia32-pc99' \
+		-ex 'target remote localhost:1234' \
+		-ex 'break main' \
+		-ex c
 
 .PHONY: help
 help:
