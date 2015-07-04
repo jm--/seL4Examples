@@ -8,6 +8,10 @@
  * @TAG(NICTA_BSD)
  */
 
+// run with: make run
+// for otherwise keyboard goes to serial input, I think
+
+
 /* Include Kconfig variables. */
 #include <autoconf.h>
 
@@ -22,9 +26,7 @@
 #include <allocman/vka.h>
 
 #include <platsupport/timer.h>
-
-
-
+#include <platsupport/chardev.h> //jm
 
 #include <sel4platsupport/platsupport.h>
 #include <sel4platsupport/plat/timer.h>
@@ -57,9 +59,10 @@ struct env {
     vspace_t vspace;
     /* abtracts over kernel version and boot environment */
     simple_t simple;
+    cspacepath_t keyboardirq_path;	//jm
     /* path for the default timer irq handler */
     cspacepath_t irq_path;
-#ifdef CONFIG_ARCH_ARM
+    #ifdef CONFIG_ARCH_ARM
     /* frame for the default timer */
     cspacepath_t frame_path;
 #elif CONFIG_ARCH_IA32
@@ -399,7 +402,19 @@ init_timer_caps(env_t env)
 #endif
 }
 
+// creates irqhandler cap
+static void
+init_keyboard_caps(env_t env, int irq)   //jm
+{
+    /* get the timer irq cap */
+    seL4_CPtr cap;
+    UNUSED int error = vka_cspace_alloc(&env->vka, &cap);
+    assert(error == 0);
 
+    vka_cspace_make_path(&env->vka, cap, &env->keyboardirq_path);
+    error = simple_get_IRQ_control(&env->simple, irq, env->keyboardirq_path);
+    assert(error == 0);
+}
 void *main_continued(void *arg UNUSED)
 {
 
@@ -464,6 +479,7 @@ void *main_continued(void *arg UNUSED)
 
 #define DEVICE_IO_TABLE_MAGIC 0x1C62D6B2
 #define DEVICE_IO_DEV_MAPPING_MAGIC 0x57545A05
+#define DEVICE_MAX_IRQ 256
 
 /* ------------------------------ Reserved CSpace caps ---------------------*/
 //
@@ -483,9 +499,39 @@ typedef struct dev_io_ops {
     uint32_t magic;
 } dev_io_ops_t;
 
+typedef void (*dev_irq_callback_fn_t)(void *cookie, uint32_t irq);
+
+typedef struct dev_irq_config {
+    int numIRQChannels;
+    int badgeBaseBit;
+    int badgeTopBit;
+    uint32_t badgeMaskBits;
+
+    seL4_CPtr notifyAsyncEP;
+    seL4_CPtr (*getIRQHandlerEndpoint)(void *cookie, int irq);
+    void *getIRQHandlerEndpointCookie;
+} dev_irq_config_t;
+
+/*! @brief IRQ handler struct. */
+typedef struct dev_irq_handler {
+    seL4_CPtr handler;
+    dev_irq_callback_fn_t callback;
+    void *cookie;
+} dev_irq_handler_t;
+
+
+/*! @brief IRQ handler state struct. */
+typedef struct dev_irq_state {
+    int magic;
+    dev_irq_config_t cfg;
+    dev_irq_handler_t handler[DEVICE_MAX_IRQ];
+    //cvector_t channel[DEVICE_IRQ_BADGE_MAX_CHANNELS];
+    uint32_t nextIRQChannel;
+} dev_irq_state_t;
+
 struct conserv_state {
     //srv_common_t commonState;
-    //dev_irq_state_t irqState;
+    dev_irq_state_t irqState;
 
     /* Main console server data structures. */
     dev_io_ops_t devIO;
@@ -613,6 +659,225 @@ devio_init(dev_io_ops_t *io)
 }
 
 
+
+/*! @brief The IRQ handling callback function.
+
+    This callback function gets called from the interrupt dispatcher module to handle RX irqs.
+    It adds the inputted character to the backlog, and then goes through the waiting list and
+    replies to any waiters.
+
+    @param cookie The input state structure (struct input_state*)
+    @param irq The IRQ number.
+*/
+//static void
+//input_handle_irq(void *cookie, uint32_t irq)
+//{
+//    struct input_state *s = (struct input_state *) cookie;
+//    assert(s && s->magic == CONSERV_DEVICE_INPUT_MAGIC);
+//    ps_cdev_handle_irq(&conServ.devSerial, irq);
+//
+//    while (1) {
+//        int c = ps_cdev_getchar(&conServ.devSerial);
+//        if (c == -1) {
+//            break;
+//        }
+//        dvprintf("You typed [%c]\n", c);
+//        input_push_char(s, c);
+//    }
+//
+//    #ifdef PLAT_PC99
+//    while (conServ.keyboardEnabled) {
+//        int c = ps_cdev_getchar(&conServ.devKeyboard);
+//        if (c == -1) {
+//            break;
+//        }
+//        dvprintf("You typed on keyboard [%c]\n", c);
+//        input_push_char(s, c);
+//    }
+//    #endif
+//
+//    /* Notify any waiters. */
+//    for (int i = 0; i < cvector_count(&s->waiterList); i++) {
+//        struct input_waiter *waiter = (struct input_waiter*) cvector_get(&s->waiterList, i);
+//        assert(waiter && waiter->magic == CONSERV_DEVICE_INPUT_WAITER_MAGIC);
+//        assert(waiter->reply && waiter->client);
+//
+//        if (cqueue_size(&s->inputBacklog) <= 0) {
+//            /* No more backlog to reply to. Cannot reply to more waiters. */
+//            break;
+//        }
+//
+//        waiter->client->rpcClient.skip_reply = false;
+//        waiter->client->rpcClient.reply = waiter->reply;
+//
+//        /* Reply to the waiter. */
+//        if (waiter->type == INPUT_WAITERTYPE_GETC) {
+//            int ch = (int) cqueue_pop(&s->inputBacklog);
+//            reply_data_getc((void*) waiter->client, ch);
+//        } else {
+//            assert(!"Not implemented.");
+//        }
+//
+//        /* Delete the saved reply cap, and free the structure. */
+//        waiter->client->rpcClient.reply = 0;
+//        csfree_delete(waiter->reply);
+//        waiter->magic = 0x0;
+//        free(waiter);
+//        cvector_set(&s->waiterList, i, (cvector_item_t) NULL);
+//        cvector_delete(&s->waiterList, i);
+//        i--;
+//    }
+//}
+
+#define REFOS_CDEPTH 32
+
+seL4_CPtr
+srv_mint(int badge, seL4_CPtr ep)
+{
+    assert(ep);
+    seL4_CPtr mintEP = ep+1;
+    int error = seL4_CNode_Mint (
+    		seL4_CapInitThreadCNode, mintEP, REFOS_CDEPTH,
+    		seL4_CapInitThreadCNode, ep, REFOS_CDEPTH,
+        seL4_CanWrite | seL4_CanGrant,
+        seL4_CapData_Badge_new(badge)
+    );
+    if (error != seL4_NoError) {
+        printf("Could not mint badge.");
+        exit(1);
+    }
+    return mintEP;
+}
+
+int dev_handle_irq(ps_chardevice_t* dev, uint32_t irq,
+                   dev_irq_callback_fn_t callback, env_t env)
+{
+    //assert(irqState && irqState->magic == DEVICE_IRQ_MAGIC);
+
+//    if (irq >= DEVICE_MAX_IRQ) {
+//        printf("dev_handle_irq IRQ num too high. Try raising DEVICE_MAX_IRQ.");
+//        assert(!"Try raising DEVICE_MAX_IRQ.");
+//        exit(1);
+//    }
+
+    /* Retrieve the handler, if necessary. */
+    init_keyboard_caps(env, irq);
+    seL4_CPtr handler = env->keyboardirq_path.capPtr;
+    printf ("irq=%d\n", irq);
+
+//    if (!irqState->handler[irq].handler) {
+//        assert(irqState->cfg.getIRQHandlerEndpoint);
+//        irqState->handler[irq].handler = irqState->cfg.getIRQHandlerEndpoint(
+//            irqState->cfg.getIRQHandlerEndpointCookie, irq
+//        );
+//        if (!irqState->handler[irq].handler) {
+//            ROS_WARNING("dev_handle_irq : could not get IRQ handler for irq %u.\n", irq);
+//            return EINVALID;
+//        }
+//    }
+
+//    /* Determine next round-robin channel to go in. */
+//    uint32_t nextChannel = irqState->cfg.badgeBaseBit + irqState->nextIRQChannel;
+//    cvector_add(&irqState->channel[irqState->nextIRQChannel], (cvector_item_t) irq);
+//    irqState->nextIRQChannel = (irqState->nextIRQChannel + 1) % irqState->cfg.numIRQChannels;
+//
+//    /* Mint the badged AEP. */
+//    assert(irqState->cfg.notifyAsyncEP);
+//    seL4_CPtr irqBadge = srv_mint((1 << nextChannel) | irqState->cfg.badgeMaskBits,
+//                                  irqState->cfg.notifyAsyncEP);
+//    if (!irqBadge) {
+//        ROS_WARNING("dev_handle_irq : could not mint badged aep for irq %u.\n", irq);
+//        return EINVALID;
+//    }
+
+    seL4_BootInfo *info = env->simple.data;
+    seL4_CPtr cnodeCap   = seL4_CapInitThreadCNode; //the CPtr of the root task's CNode
+    seL4_Word emptyStart = info->empty.start;       //start of the empty region in cnodeCap
+    //seL4_Word emptyEnd   = info->empty.end;         //end of the empty region in cnodeCap
+    seL4_CPtr memoryCap  = seL4_CapNull;            //CPtr to largest untyped memory object
+
+    for (int maxbits = -1, i = 0; i < info->untyped.end - info->untyped.start; i++) {
+        if (info->untypedSizeBitsList[i] > maxbits) {
+            //we found a new largest memory object
+            memoryCap = info->untyped.start + i;
+            maxbits = info->untypedSizeBitsList[i];  //current bits become max
+        }
+    }
+    int error;
+      seL4_Word irqEP = emptyStart + 5;
+
+//      res = seL4_Untyped_Retype(memoryCap,
+//    		  seL4_EndpointObject, 0, // type, size_bits
+//                                cnodeCap, 0, 0,    // root, index, depth
+//                                irqEP, 1);          // offset, num
+      error = seL4_Untyped_RetypeAtOffset(memoryCap,
+    		  seL4_AsyncEndpointObject, 0, 0,// type, newparam, size_bits,
+                    cnodeCap, 0, 0,    // root, index, depth
+                    irqEP, 1);          // offset, num
+      if (error) {
+          printf("seL4_Untyped_RetypeAtOffse failed:  %x\n", error);
+          exit(1); //seL4_AsyncEndpointObject, seL4_EndpointObject
+      }
+
+      //seL4_CPtr irqBadge = srv_mint(1,irqEP);
+      //irqEP = irqBadge;
+
+    /* Assign AEP to the IRQ handler. */
+    error = seL4_IRQHandler_SetEndpoint(handler, irqEP);
+    if (error) {
+        printf("dev_handle_irq : could not set notify aep for irq %u.\n", irq);
+        exit(1);
+//        csfree_delete(irqBadge);
+//        return EINVALID;
+    }
+    for (int i=0; i < 10; i++) {
+    	int c = ps_cdev_getchar(dev);
+    	printf ("pre getchar: %d, ack next %d\n", c, i);
+    	error = seL4_IRQHandler_Ack(handler);
+		if (error) {
+			printf("seL4_IRQHandler_Ack : failed %u.\n", error);
+			exit(1);
+		}
+    }
+    /* Set callback function and cookie. */
+//    irqState->handler[irq].callback = callback;
+//    irqState->handler[irq].cookie = cookie;
+//
+//    csfree_delete(irqBadge);
+//    return ESUCCESS;
+
+    for (;;) {
+    	seL4_MessageInfo_t msg = seL4_Wait(irqEP, NULL);
+    	printf("X: %d\n", (seL4_MessageInfo_get_label(msg) == seL4_NoFault));
+    	fflush(stdout);
+
+        //ps_cdev_handle_irq(&conServ.devSerial, irq);
+
+
+        while (1) {
+            //int c = __arch_getchar();
+            int c = ps_cdev_getchar(dev);
+            if (c == -1) {
+                break;
+            }
+            printf("You typed [%c]\n", c);
+            //input_push_char(s, c);
+        }
+
+
+    	error = seL4_IRQHandler_Ack(handler);
+        if (error) {
+            printf("seL4_IRQHandler_Ack : failed %u.\n", error);
+            exit(1);
+        }
+    }
+
+
+
+
+    return 0;
+}
+
 //=============================================================================
 //int main(void)
 int main(int argc, char *argv[])
@@ -686,7 +951,7 @@ int main(int argc, char *argv[])
         assert(!"ps_cdev_init failed.");
         exit(1);
     }
-    for(;;) {
+    for(;0;) {
         int count;
         char data;
         count = conServ.devKeyboard.read(&conServ.devKeyboard, &data, 1, NULL, NULL);
@@ -694,7 +959,38 @@ int main(int argc, char *argv[])
           printf ("char: %c\n", data);
         }
         fflush(stdout);
+/* try this:
+        int c = ps_cdev_getchar(&conServ.devKeyboard);
+        if (c == -1) {
+            break;
+        }
+ */
     }
+
+    //dev_handle_irq(&conServ.irqState, 4, NULL, &env);
+    //exit(1);
+    //-------------
+    //inside: void input_init(struct input_state *s)
+    /* Loop through every possible IRQ, and get the ones that the input device needs to
+       listen to. */
+    for (uint32_t i = 0; i < DEVICE_MAX_IRQ; i++) {
+//        if (ps_cdev_produces_irq(&conServ.devSerial, i)) {
+//            dev_handle_irq(&conServ.irqState, i, input_handle_irq, (void*) s);
+//            input_handle_irq((void*) s, i);
+//        }
+            if (ps_cdev_produces_irq(&conServ.devKeyboard, i)) {
+                dev_handle_irq(&conServ.devKeyboard, i, NULL, &env);
+                //input_handle_irq((void*) s, i);
+            }
+            //input_handle_irq
+    }
+
+
+
+
+
+
     return 0;
 }
+
 
