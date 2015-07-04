@@ -8,10 +8,10 @@
 # @TAG(NICTA_BSD)
 #
 
-apps-$(CONFIG_APP_KEYBOARD)        += keyboard
+apps-$(CONFIG_APP_KEYBOARD2)        += keyboard2
 
 # list of libraries the app needs to build
-keyboard-y                          = common libsel4 libmuslc libsel4vka libcpio libelf \
+keyboard2-y                          = common libsel4 libmuslc libsel4vka libcpio libelf \
                                       libsel4allocman \
                                       libsel4platsupport libsel4platsupport libsel4muslcsys libsel4test \
                                       libsel4simple libsel4vspace libsel4utils libutils
@@ -24,4 +24,4 @@ keyboard-$(CONFIG_LIB_SEL4_SIMPLE_DEFAULT) += libsel4simple-default
 endif
 
 #prerequisites
-keyboard: kernel_elf $(keyboard-y)
+keyboard2: kernel_elf $(keyboard2-y)
