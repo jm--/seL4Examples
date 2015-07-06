@@ -28,6 +28,7 @@ menu "seL4 Applications"
     source "apps/keyboard2/Kconfig"
     source "apps/ega/Kconfig"
     source "apps/graphics/Kconfig"
+    source "apps/loaddata/Kconfig"
 endmenu
 
 menu "seL4 Libraries"
