@@ -8,6 +8,12 @@
  * @TAG(NICTA_BSD)
  */
 
+/*
+ * make menuconfig
+ * 		Boot options -> enable linear graphics mode (default is 1024x768, 32)
+ * 		select 320x200, 8 colors
+ * make run-cdrom
+ */
 
 /* Include Kconfig variables. */
 #include <autoconf.h>
@@ -123,10 +129,12 @@ init_env(env_t env)
     bootstrap_configure_virtual_pool(allocman, vaddr,
                                      ALLOCATOR_VIRTUAL_POOL_SIZE, simple_get_pd(&env->simple));
 }
+//=============================================================================
 
+//seL4_Word vram = 0xB8000; //BIOS_PADDR_VIDEO_RAM_TEXT_MODE_START, EGA_TEXT_FB_BASE
+seL4_Word vram = 0xA0000;	//BIOS_PADDR_VIDEO_RAM_START
 
-
-void demo(seL4_BootInfo *info) {
+void mapVideoRam(seL4_BootInfo *info) {
 	seL4_CPtr cnodeCap = seL4_CapInitThreadCNode; //the CPtr of the root task's CNode
 	seL4_Word emptyStart = info->empty.start; //start of the empty region in cnodeCap
 	seL4_CPtr memoryCap = seL4_CapNull;  //CPtr to largest untyped memory object
@@ -142,35 +150,7 @@ void demo(seL4_BootInfo *info) {
 		}
 	}
 
-
-	///////////////////////////////////////////////////////////  map a 4MB page
-	//some memory mapping experiments (with handselected, hardcoded values)
-	/*
-	 //create a 4MB frame
-	 seL4_Word offs = emptyStart + 2;
-	 seL4_CPtr cap4MB = 0x159;     //cap to a 4MB (22 bits) untyped memory area
-	 seL4_Word vaddr = 0x00400000; //address of said area, needs to align to 4MB
-	 res = seL4_Untyped_RetypeAtOffset(cap4MB,
-	 seL4_IA32_LargePage, 0, 0, // type, ,size_bits
-	 cnodeCap, 0, 0,            // root, index, depth
-	 offs, 1);                  // offset, num
-	 printf("seL4_Untyped_RetypeAtOffset--seL4_IA32_LargePage (4MB page): %x\n", res);
-
-	 //map frame to page directory
-	 res = seL4_IA32_Page_Map(offs ,seL4_CapInitThreadPD, vaddr, seL4_AllRights, seL4_IA32_Default_VMAttributes);
-	 //res = seL4_IA32_Page_Map(offs ,offs+1, vaddr, seL4_AllRights, seL4_IA32_Default_VMAttributes);
-	 printf("page map result is %x\n", res);
-
-	 //now can access it
-	 char* p = (char*) vaddr;
-	 printf("current value at 0x%x is %d\n", vaddr, *p);
-	 *p=65;
-	 printf("new value is %d\n", *p);	//prints 65 (to serial output)
-	 */
 	//////////////////////////////////////////////////////////// map vram
-	seL4_Word vram = 0xB8000;
-	//seL4_Word vram = 0xA0000;
-
 	//find untyped device memory containing vram
 	printf("\n--- Device Untyped Details ---\n");
 	printf("Untyped Slot       Paddr      Bits\n");
@@ -222,17 +202,6 @@ void demo(seL4_BootInfo *info) {
 			seL4_AllRights, seL4_IA32_Default_VMAttributes);
 	printf("seL4_IA32_Page_Map: %x\n", res);
 
-	char *corner = (char*) vram;
-	printf("VRAM: |%c|\n", *corner);
-
-	//write across row 5
-	const int row = 5;
-	char *p = corner + (80 * 2 * row);
-	for (int i = 0; i < 80; i++) {
-		*p++ = '0' + i;
-		*p++ = i;	//background
-
-	}
 	////////////////////////////////////////////////////////////////
 }
 
@@ -259,7 +228,12 @@ int main()
     platsupport_serial_setup_simple(NULL, &env.simple, &env.vka);
 
     simple_print(&env.simple);
-    printf("\n\n>>>>>>>>>> ega - write to VRAM <<<<<<<<<< \n\n");
-    demo(info);
+    printf("\n\n>>>>>>>>>> graphics - write to VRAM <<<<<<<<<< \n\n");
+    mapVideoRam(info);
 
+    //write to mapped page
+    char *p = (char*) vram; //top left pixel
+    for (int i = 0; i < 0x1000; i++) {
+        *(p + i) = i % 256;
+    }
 }
