@@ -11,7 +11,7 @@
 lib-dirs:=libs
 
 # The main target we want to generate
-all: app-images
+all: app-images cdrom
 
 -include .config
 
@@ -48,6 +48,30 @@ gdb:
 		-ex 'target remote localhost:1234' \
 		-ex 'break main' \
 		-ex c
+
+debug-cdrom run-cdrom: $(IMAGE_ROOT)/cdrom.iso
+	qemu-system-i386 $(if $(subst run-cdrom,,$@), -s -S) \
+		-m 512 -serial stdio \
+		-cdrom $(IMAGE_ROOT)/cdrom.iso \
+		-boot order=d	\
+		-vga std
+
+#$(IMAGE_ROOT)/cdrom.iso: cdrom
+
+# make a basic cdrom image
+cdrom: grub.cfg app-images
+	@echo " [CD-ROM]"
+	$(Q)mkdir -p $(IMAGE_ROOT)/cdrom/boot/grub
+	$(Q)cp grub.cfg $(IMAGE_ROOT)/cdrom/boot/grub
+	$(Q)cp $(IMAGE_ROOT)/kernel-ia32-pc99        $(IMAGE_ROOT)/cdrom/kernel
+	$(Q)cp $(IMAGE_ROOT)/$(apps)-image-ia32-pc99 $(IMAGE_ROOT)/cdrom/app-image
+	$(Q)grub-mkrescue -o $(IMAGE_ROOT)/cdrom.iso $(IMAGE_ROOT)/cdrom
+
+clean-cdrom:
+	@echo "[CLEAN] cdrom"
+	$(Q)rm -rf $(IMAGE_ROOT)/cdrom.iso $(IMAGE_ROOT)/cdrom
+
+
 
 .PHONY: help
 help:
