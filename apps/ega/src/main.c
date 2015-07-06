@@ -125,8 +125,12 @@ init_env(env_t env)
 }
 
 
+//=============================================================================
 
-void demo(seL4_BootInfo *info) {
+seL4_Word vram = 0xB8000; //BIOS_PADDR_VIDEO_RAM_TEXT_MODE_START, EGA_TEXT_FB_BASE
+//seL4_Word vram = 0xA0000;	//BIOS_PADDR_VIDEO_RAM_START
+
+void mapVideoRam(seL4_BootInfo *info) {
 	seL4_CPtr cnodeCap = seL4_CapInitThreadCNode; //the CPtr of the root task's CNode
 	seL4_Word emptyStart = info->empty.start; //start of the empty region in cnodeCap
 	seL4_CPtr memoryCap = seL4_CapNull;  //CPtr to largest untyped memory object
@@ -195,7 +199,7 @@ void demo(seL4_BootInfo *info) {
 	printf("capUntypedStart = 0x%x\n", capUntypedStart);
 	printf("memUntypedStart = 0x%x\n", memUntypedStart);
 	printf("numPages        = %d\n", numPages);
-	printf("memoryCap       = 0x%d\n", memoryCap);
+	printf("memoryCap       = 0x%x\n", memoryCap);
 
 	//get numPages of memory so to get hold of VRAM area
 	res = seL4_Untyped_RetypeAtOffset(capUntypedStart,
@@ -222,17 +226,6 @@ void demo(seL4_BootInfo *info) {
 			seL4_AllRights, seL4_IA32_Default_VMAttributes);
 	printf("seL4_IA32_Page_Map: %x\n", res);
 
-	char *corner = (char*) vram;
-	printf("VRAM: |%c|\n", *corner);
-
-	//write across row 5
-	const int row = 5;
-	char *p = corner + (80 * 2 * row);
-	for (int i = 0; i < 80; i++) {
-		*p++ = '0' + i;
-		*p++ = i;	//background
-
-	}
 	////////////////////////////////////////////////////////////////
 }
 
@@ -260,6 +253,17 @@ int main()
 
     simple_print(&env.simple);
     printf("\n\n>>>>>>>>>> ega - write to VRAM <<<<<<<<<< \n\n");
-    demo(info);
+    mapVideoRam(info);
 
+	char *corner = (char*) vram;
+	printf("VRAM: |%c|\n", *corner);
+
+	//write across row 5
+	const int row = 5;
+	char *p = corner + (80 * 2 * row);
+	for (int i = 0; i < 80; i++) {
+		*p++ = '0' + i;
+		*p++ = i;	//background
+
+	}
 }
