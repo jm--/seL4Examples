@@ -23,7 +23,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <limits.h>
-#include <arch_stdio.h>
+#include <math.h>
 
 #include <allocman/bootstrap.h>
 #include <allocman/vka.h>
@@ -167,15 +167,21 @@ void mapVideoRam(seL4_BootInfo *info) {
 	i--;
 	seL4_CPtr capUntypedStart = info->deviceUntyped.start + i;
 	seL4_Word memUntypedStart = info->untypedPaddrList[i + offset];
-	seL4_CPtr numPages = (vram - memUntypedStart) / 4096 + 1;
-	seL4_CPtr empty = emptyStart+1000;
+	seL4_Word numPagesToVRam = (vram - memUntypedStart) / PAGE_SIZE; //to get to vram
+	seL4_Word mumPagesVRam = ceil((double)320 * 200 / PAGE_SIZE); //actual vram pages
+	//e.g. 320 * 200 / 4096 = 15.625, so we need 16 pages
+	seL4_Word numPages = numPagesToVRam + mumPagesVRam;
+	seL4_CPtr empty = emptyStart+1000; //empty slots, hopefully
 	seL4_CPtr capPagesStart = empty;
 	empty += numPages;
 
 	printf("capUntypedStart = 0x%x\n", capUntypedStart);
 	printf("memUntypedStart = 0x%x\n", memUntypedStart);
+	printf("numPagesToVRam  = 0x%x\n", numPagesToVRam);
+	printf("mumPagesVRam    = 0x%x\n", mumPagesVRam);
 	printf("numPages        = %d\n", numPages);
-	printf("memoryCap       = 0x%d\n", memoryCap);
+	printf("memoryCap       = 0x%x\n", memoryCap);
+	printf("PAGE_SIZE       = 0x%x = %d\n", PAGE_SIZE, PAGE_SIZE); //4K
 
 	//get numPages of memory so to get hold of VRAM area
 	res = seL4_Untyped_RetypeAtOffset(capUntypedStart,
@@ -197,11 +203,13 @@ void mapVideoRam(seL4_BootInfo *info) {
 			seL4_IA32_Default_VMAttributes);
 	printf("seL4_IA32_PageTable_Map: %x\n", res);
 
-	//map vram page to page table
-	res = seL4_IA32_Page_Map(capPagesStart + numPages - 1, seL4_CapInitThreadPD, vram,
-			seL4_AllRights, seL4_IA32_Default_VMAttributes);
-	printf("seL4_IA32_Page_Map: %x\n", res);
-
+	//map vram pages to page table
+	for (i = 0; i < mumPagesVRam; i++) {
+		res = seL4_IA32_Page_Map(capPagesStart + numPagesToVRam + i,
+				seL4_CapInitThreadPD, vram + PAGE_SIZE * i,
+				seL4_AllRights, seL4_IA32_Default_VMAttributes);
+		printf("seL4_IA32_Page_Map: %x (page %d)\n", res, i);
+	}
 	////////////////////////////////////////////////////////////////
 }
 
@@ -233,7 +241,12 @@ int main()
 
     //write to mapped page
     char *p = (char*) vram; //top left pixel
-    for (int i = 0; i < 0x1000; i++) {
-        *(p + i) = i % 256;
+    int i;
+    for (i = 0; i < 320 * 200; i++) {
+        *(p + i) = i % 42;
+        if (i % PAGE_SIZE == 0) {
+            printf("."); // if page is mapped, we'll see the dot
+        }
     }
+    printf("\n");
 }
