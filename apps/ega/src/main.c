@@ -127,12 +127,12 @@ init_env(env_t env)
 
 
 void demo(seL4_BootInfo *info) {
-
 	seL4_CPtr cnodeCap = seL4_CapInitThreadCNode; //the CPtr of the root task's CNode
 	seL4_Word emptyStart = info->empty.start; //start of the empty region in cnodeCap
-	seL4_Word emptyEnd = info->empty.end;  //end of the empty region in cnodeCap
 	seL4_CPtr memoryCap = seL4_CapNull;  //CPtr to largest untyped memory object
+	int res = seL4_NoError;
 
+	//find largest memory area
 	for (int maxbits = -1, i = 0; i < info->untyped.end - info->untyped.start;
 			i++) {
 		if (info->untypedSizeBitsList[i] > maxbits) {
@@ -142,16 +142,12 @@ void demo(seL4_BootInfo *info) {
 		}
 	}
 
-	printf("** demo: 0x%x 0x%x 0x%x 0x%x\n", cnodeCap, emptyStart, emptyEnd,
-			memoryCap);
 
-	int res = seL4_NoError;
-	////////////////////  map a 4MB page
-	seL4_Word offs = emptyStart + 2;
-
-//some memory mapping experiments (with handselected, hardcoded values)
+	///////////////////////////////////////////////////////////  map a 4MB page
+	//some memory mapping experiments (with handselected, hardcoded values)
 	/*
 	 //create a 4MB frame
+	 seL4_Word offs = emptyStart + 2;
 	 seL4_CPtr cap4MB = 0x159;     //cap to a 4MB (22 bits) untyped memory area
 	 seL4_Word vaddr = 0x00400000; //address of said area, needs to align to 4MB
 	 res = seL4_Untyped_RetypeAtOffset(cap4MB,
@@ -174,50 +170,69 @@ void demo(seL4_BootInfo *info) {
 	//////////////////////////////////////////////////////////// map vram
 	seL4_Word vram = 0xB8000;
 	//seL4_Word vram = 0xA0000;
-	seL4_CPtr empty = offs+1000;
-	seL4_CPtr capFrame = empty;
-	seL4_CPtr numPages = 57;
+
+	//find untyped device memory containing vram
+	printf("\n--- Device Untyped Details ---\n");
+	printf("Untyped Slot       Paddr      Bits\n");
+	int offset = info->untyped.end - info->untyped.start;
+	int numSlots = info->deviceUntyped.end - info->deviceUntyped.start;
+	int i;
+	for (i = 0; i < numSlots && info->untypedPaddrList[i + offset] < vram; i++) {
+		//this loop is from simple_stable_print() in libsimple
+		printf("%3d     0x%08x 0x%08x %d\n", i, info->deviceUntyped.start + i,
+				info->untypedPaddrList[i + offset],
+				info->untypedSizeBitsList[i + offset]);
+	}
+
+	i--;
+	seL4_CPtr capUntypedStart = info->deviceUntyped.start + i;
+	seL4_Word memUntypedStart = info->untypedPaddrList[i + offset];
+	seL4_CPtr numPages = (vram - memUntypedStart) / 4096 + 1;
+	seL4_CPtr empty = emptyStart+1000;
+	seL4_CPtr capPagesStart = empty;
 	empty += numPages;
 
-	//create a 4KB frame
-	seL4_CPtr capVram = 0x173;
-	res = seL4_Untyped_RetypeAtOffset(capVram, seL4_IA32_4K, 0, 0, // type, ,size_bits
-			cnodeCap, 0, 0,            // root, index, depth
-			capFrame, numPages);                  // offset, num
+	printf("capUntypedStart = 0x%x\n", capUntypedStart);
+	printf("memUntypedStart = 0x%x\n", memUntypedStart);
+	printf("numPages        = %d\n", numPages);
+	printf("memoryCap       = 0x%d\n", memoryCap);
+
+	//get numPages of memory so to get hold of VRAM area
+	res = seL4_Untyped_RetypeAtOffset(capUntypedStart,
+			seL4_IA32_4K, 0, 0,           // type, ,size_bits
+			cnodeCap, 0, 0,               // root, index, depth
+			capPagesStart, numPages);     // offset, num
 	printf("seL4_Untyped_RetypeAtOffset--seL4_IA32_4K: %x\n", res);
 
+	//create a page table
 	seL4_Word pt = empty++;
-	res = seL4_Untyped_RetypeAtOffset(memoryCap, seL4_IA32_PageTableObject, 0,
-			0, // type, ,size_bits
+	res = seL4_Untyped_RetypeAtOffset(memoryCap,
+			seL4_IA32_PageTableObject, 0,0,  // type, ,size_bits
 			cnodeCap, 0, 0,                  // root, index, depth
 			pt, 1);                          // offset, num
 	printf("seL4_Untyped_RetypeAtOffset--seL4_IA32_PageTableObject: %x\n", res);
 
+	//map page table to page directory
 	res = seL4_IA32_PageTable_Map(pt, seL4_CapInitThreadPD, vram,
 			seL4_IA32_Default_VMAttributes);
 	printf("seL4_IA32_PageTable_Map: %x\n", res);
 
-//	for (int i = 0; 0 && i < numPages; i++) {
-//		//res = seL4_IA32_Page_Map(capFrame, seL4_CapInitThreadPD, vram, seL4_AllRights, seL4_IA32_Default_VMAttributes);
-//		res = seL4_IA32_Page_Map(capFrame, seL4_CapInitThreadPD,
-//				0x80000 + 4096 * i, seL4_AllRights,
-//				seL4_IA32_Default_VMAttributes);
-//		printf("seL4_IA32_Page_Map: %x\n", res);
-//	}
-	res = seL4_IA32_Page_Map(capFrame + 56, seL4_CapInitThreadPD, vram,
+	//map vram page to page table
+	res = seL4_IA32_Page_Map(capPagesStart + numPages - 1, seL4_CapInitThreadPD, vram,
 			seL4_AllRights, seL4_IA32_Default_VMAttributes);
 	printf("seL4_IA32_Page_Map: %x\n", res);
 
-	char *p2 = (char*) vram;
-	printf("VRAM: |%c|\n", *p2);
+	char *corner = (char*) vram;
+	printf("VRAM: |%c|\n", *corner);
 
-	for (int i = 0; i < 80 * 2; i++) {
-		*(p2 + i + 80 * 10) = i;
+	//write across row 5
+	const int row = 5;
+	char *p = corner + (80 * 2 * row);
+	for (int i = 0; i < 80; i++) {
+		*p++ = '0' + i;
+		*p++ = i;	//background
+
 	}
-//  for (int i=0; i < 0x1000; i++) {
-//	  *(p2 + i) = i % 256;
-//  }
-	//seL4_NoError
 	////////////////////////////////////////////////////////////////
 }
 
