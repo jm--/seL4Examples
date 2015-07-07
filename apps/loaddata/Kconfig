@@ -9,18 +9,9 @@
 #
 
 menuconfig APP_LOADDATA
-    bool "loaddata - how to get data into memory"
+    bool "loaddata - use libcpio to include two files in image"
     default y
     depends on LIB_SEL4 && (LIB_MUSL_C || LIB_SEL4_C) && LIB_SEL4_PLAT_SUPPORT && LIB_SEL4_VKA && LIB_SEL4_TEST && LIB_SEL4_UTILS && LIB_UTILS
     help
-        seL4 Test application - how to get data into RAM
+        how to get data into memory - use libcpio to include two files in image
 
-config HAVE_TIMER
-    depends on APP_SEL4TEST
-    bool "Enable tests that require a timer driver"
-    default n
-
-config HAVE_CACHE
-    depends on APP_SEL4TEST
-    bool "Enable tests that require a functioning cache"
-    default n

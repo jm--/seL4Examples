@@ -24,8 +24,9 @@ loaddata-$(CONFIG_LIB_SEL4_SIMPLE_DEFAULT) += libsel4simple-default
 endif
 
 # add the tests app  as a component so that we can elf load it
-loaddata-components-y += sel4test-tests
-loaddata-components = $(addprefix $(STAGE_BASE)/bin/, $(loaddata-components-y))
+#loaddata-components-y += sel4test-tests
+#loaddata-components = $(addprefix $(STAGE_BASE)/bin/, $(loaddata-components-y))
 
-loaddata: export COMPONENTS=${loaddata-components}
-loaddata: ${loaddata-components-y} kernel_elf $(loaddata-y)
+#loaddata: export COMPONENTS=${loaddata-components}
+#loaddata: ${loaddata-components-y} kernel_elf $(loaddata-y)
+loaddata: kernel_elf $(loaddata-y)
