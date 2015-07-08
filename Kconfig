@@ -29,6 +29,7 @@ menu "seL4 Applications"
     source "apps/ega/Kconfig"
     source "apps/graphics/Kconfig"
     source "apps/loaddata/Kconfig"
+    source "apps/loaddata2/Kconfig"
 endmenu
 
 menu "seL4 Libraries"
