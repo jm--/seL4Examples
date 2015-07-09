@@ -30,6 +30,7 @@ menu "seL4 Applications"
     source "apps/graphics/Kconfig"
     source "apps/loaddata/Kconfig"
     source "apps/loaddata2/Kconfig"
+    source "apps/timer/Kconfig"
 endmenu
 
 menu "seL4 Libraries"
