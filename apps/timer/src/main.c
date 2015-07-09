@@ -20,10 +20,10 @@
 #include <allocman/bootstrap.h>
 #include <allocman/vka.h>
 
-#include <platsupport/timer.h>
+#include <platsupport/timer.h>    // TIME STUFF
 
 #include <sel4platsupport/platsupport.h>
-#include <sel4platsupport/plat/timer.h>
+#include <sel4platsupport/plat/timer.h>    // TIME STUFF
 #include <sel4utils/vspace.h>
 #include <sel4utils/stack.h>
 #include <sel4utils/process.h>
@@ -36,6 +36,7 @@
 #endif
 
 #include <utils/util.h>
+#include <utils/time.h>    // TIME STUFF
 
 #include <vka/object.h>
 #include <vka/capops.h>
@@ -50,19 +51,24 @@ struct env {
     vspace_t vspace;
     /* abtracts over kernel version and boot environment */
     simple_t simple;
-    /* path for the default timer irq handler */
+    /* path for the default timer irq handler; IRQHandler cap*/
     cspacepath_t irq_path;
 #ifdef CONFIG_ARCH_ARM
     /* frame for the default timer */
     cspacepath_t frame_path;
 #elif CONFIG_ARCH_IA32
-    /* io port for the default timer */
+    /* io port for the default timer; seL4_CapIOPort from bootinfo */
     seL4_CPtr io_port_cap;
 #endif
     /* init data frame vaddr */
     //test_init_data_t *init;
     /* extra cap to the init data frame for mapping into the remote vspace */
     //seL4_CPtr init_frame_cap_copy;
+
+    /* initialised timer */
+    seL4_timer_t *timer;
+    /* aep for timer */
+    vka_object_t timer_aep;
 };
 
 #include <sel4test/test.h>
@@ -72,11 +78,11 @@ struct testcase* __start__test_case;
 struct testcase* __stop__test_case;
 
 
-/* ammount of untyped memory to reserve for the driver (32mb) */
-#define DRIVER_UNTYPED_MEMORY (1 << 25)
-/* Number of untypeds to try and use to allocate the driver memory.
- * if we cannot get 32mb with 16 untypeds then something is probably wrong */
-#define DRIVER_NUM_UNTYPEDS 16
+///* ammount of untyped memory to reserve for the driver (32mb) */
+//#define DRIVER_UNTYPED_MEMORY (1 << 25)
+///* Number of untypeds to try and use to allocate the driver memory.
+// * if we cannot get 32mb with 16 untypeds then something is probably wrong */
+//#define DRIVER_NUM_UNTYPEDS 16
 
 /* dimensions of virtual memory for the allocator to use */
 #define ALLOCATOR_VIRTUAL_POOL_SIZE ((1 << seL4_PageBits) * 100)
@@ -137,9 +143,127 @@ init_env(env_t env)
 }
 
 
-//=======================================================================
-//=======================================================================
-//=======================================================================
+
+//this code (from the test-driver) is not required here
+//because "simple" knows how to produce the two required caps
+//(IRQHandler and seL4_CapIOPort) when ask from libplatsupport
+/*
+static void
+init_timer_caps(env_t env)
+{
+    // get the timer irq cap
+    seL4_CPtr cap;
+    UNUSED int error = vka_cspace_alloc(&env->vka, &cap);
+    assert(error == 0);
+
+    vka_cspace_make_path(&env->vka, cap, &env->irq_path);
+
+    //calls:  seL4_IRQControl_Get(seL4_CapIRQControl, irq, root, index, depth);
+    // DEFAULT_TIMER_INTERRUPT = irq = 0
+    // creates an IRQHandler cap for specified interrupt
+    error = simple_get_IRQ_control(&env->simple, DEFAULT_TIMER_INTERRUPT, env->irq_path);
+    assert(error == 0);
+
+#ifdef CONFIG_ARCH_ARM
+    //get the timer frame cap
+    error = vka_cspace_alloc(&env->vka, &cap);
+    assert(error == 0);
+
+    vka_cspace_make_path(&env->vka, cap, &env->frame_path);
+    error = simple_get_frame_cap(&env->simple, (void *) DEFAULT_TIMER_PADDR, PAGE_BITS_4K, &env->frame_path);
+    assert(error == 0);
+#elif CONFIG_ARCH_IA32
+    //simply returns: seL4_CapIOPort (PIT_IO_PORT_MIN and PIT_IO_PORT_MAX are ignored)
+    env->io_port_cap = simple_get_IOPort_cap(&env->simple, PIT_IO_PORT_MIN, PIT_IO_PORT_MAX);
+    assert(env->io_port_cap != 0);
+#else
+#error "Unknown architecture"
+#endif
+}
+*/
+
+
+//custom timer callback function
+static void
+my__pit_handle_irq(const pstimer_t* device, uint32_t irq)
+{
+    static int count = 0;
+
+    count %= 100;
+    if (count++ == 0) {
+        //current timer value (in ns)
+        //calls pit_get_time(const pstimer_t* device)
+        uint64_t t = device->get_time(device);
+        printf("\n%llu ns \n", t);
+    } else {
+        printf(".");
+    }
+    fflush(stdout);
+
+
+    //uint64_t device->get_time(device);
+}
+
+
+//from app sel4test-tests: main.c
+static void
+init_timer(env_t env)
+{
+    UNUSED int error;
+
+    error = vka_alloc_async_endpoint(&env->vka, &env->timer_aep);
+    assert(error == 0);
+
+    env->timer = sel4platsupport_get_default_timer(&env->vka, &env->vspace,
+                                                   &env->simple, env->timer_aep.cptr);
+    assert(env->timer != NULL);
+
+    env->timer->timer->handle_irq = my__pit_handle_irq;
+}
+
+
+//from app sel4test-tests: helpers.c
+static void
+wait_for_timer_interrupt(env_t env)
+{
+    seL4_Word sender_badge;
+    seL4_Wait(env->timer_aep.cptr, &sender_badge);
+    sel4_timer_handle_single_irq(env->timer);
+}
+
+
+//from app sel4test-tests: interrupr.c
+static int
+test_interrupt(env_t env)
+{
+    //env->timer->timer is of type pstimer_t
+    //calls: pit_periodic(env->timer->timer, 10 * NS_IN_MS),
+    //which in turn calls configure_pit
+    int error = timer_periodic(env->timer->timer, 10 * NS_IN_MS);
+    assert(error == 0);
+
+    //calls pit_start(), which does not do anything
+    timer_start(env->timer->timer);
+
+    //(1) calls env->timer->timer->handle_irq, which by default
+    //    points to: pit_handle_irq(const pstimer_t* device, uint32_t irq)
+    //    which does nothing by default
+    //(2) then calls: seL4_IRQHandler_Ack(data->irq);
+    sel4_timer_handle_single_irq(env->timer);
+
+    printf("\n");
+    for (int i = 0; i < 1000; i++) {
+        wait_for_timer_interrupt(env);
+        //printf(".");
+        //fflush(stdout);
+    }
+    printf("\n");
+
+    timer_stop(env->timer->timer);
+    sel4_timer_handle_single_irq(env->timer);
+
+    return 0;
+}
 
 
 int main(void)
@@ -163,7 +287,16 @@ int main(void)
     /* enable serial driver */
     platsupport_serial_setup_simple(NULL, &env.simple, &env.vka);
 
-    printf("\n\n>>>>>>>>>> timer <<<<<<<<<< \n\n");
+    printf("\n\n>>>>>>>>>> timer - test timer interrupt <<<<<<<<<< \n\n");
+    uint64_t tsc = rdtsc_pure();
+    printf("tsc=%llu\n", tsc);
 
+    /* get the caps we need to send to tests to set up a timer */
+    //init_timer_caps(&env);
+
+    /* initialize the timer */
+    init_timer(&env);
+
+    test_interrupt(&env);
     return 0;
 }
