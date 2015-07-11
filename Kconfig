@@ -32,6 +32,7 @@ menu "seL4 Applications"
     source "apps/loaddata2/Kconfig"
     source "apps/timer/Kconfig"
     source "apps/threads/Kconfig"
+    source "apps/badges/Kconfig"
 endmenu
 
 menu "seL4 Libraries"
