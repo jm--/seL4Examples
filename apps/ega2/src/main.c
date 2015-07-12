@@ -22,12 +22,8 @@
 #include <allocman/bootstrap.h>
 #include <allocman/vka.h>
 
-#include <platsupport/timer.h>
-#include <platsupport/chardev.h> //jm
-
 #include <sel4platsupport/platsupport.h>
-#include <sel4platsupport/plat/timer.h>
-#include <sel4platsupport/arch/io.h> //jm
+#include <sel4platsupport/io.h>
 
 #include <sel4utils/vspace.h>
 #include <sel4utils/stack.h>
@@ -59,8 +55,8 @@ struct env {
     vspace_t vspace;
     /* abtracts over kernel version and boot environment */
     simple_t simple;
-    /* cap for vram page */
-    seL4_CPtr vram_cap;
+    /* platsupport I/O */
+    ps_io_ops_t io_ops;
 };
 
 
@@ -111,119 +107,28 @@ init_env(env_t env)
     assert(virtual_reservation.res);
     bootstrap_configure_virtual_pool(allocman, vaddr,
                                      ALLOCATOR_VIRTUAL_POOL_SIZE, simple_get_pd(&env->simple));
+
+    //initialize env->io_ops
+    error = sel4platsupport_new_io_ops(env->simple, env->vspace,
+                    env->vka, &env->io_ops);
+    assert(error == 0);
 }
 
 
 //=============================================================================
 
 /*
- * Map video RAM with regular system calls.
+ * Map video RAM with support libs.
  */
 void* mapVideoRam(env_t env) {
-	seL4_BootInfo *info = (seL4_BootInfo *) env->simple.data;  //bootinfo
-	seL4_CPtr cnodeCap = seL4_CapInitThreadCNode; //the CPtr of the root task's CNode
-	seL4_Word emptyStart = info->empty.start; //start of the empty region in cnodeCap
-	seL4_CPtr memoryCap = seL4_CapNull;  //CPtr to largest untyped memory object
-	int res = seL4_NoError;
-
-	//find largest memory area
-	for (int maxbits = -1, i = 0; i < info->untyped.end - info->untyped.start;
-			i++) {
-		if (info->untypedSizeBitsList[i] > maxbits) {
-			//we found a new largest memory object
-			memoryCap = info->untyped.start + i;
-			maxbits = info->untypedSizeBitsList[i];  //current bits become max
-		}
-	}
-
-
-	///////////////////////////////////////////////////////////  map a 4MB page
-	//some memory mapping experiments (with handselected, hardcoded values)
-	/*
-	 //create a 4MB frame
-	 seL4_Word offs = emptyStart + 2;
-	 seL4_CPtr cap4MB = 0x159;     //cap to a 4MB (22 bits) untyped memory area
-	 seL4_Word vaddr = 0x00400000; //address of said area, needs to align to 4MB
-	 res = seL4_Untyped_RetypeAtOffset(cap4MB,
-	 seL4_IA32_LargePage, 0, 0, // type, ,size_bits
-	 cnodeCap, 0, 0,            // root, index, depth
-	 offs, 1);                  // offset, num
-	 printf("seL4_Untyped_RetypeAtOffset--seL4_IA32_LargePage (4MB page): %x\n", res);
-
-	 //map frame to page directory
-	 res = seL4_IA32_Page_Map(offs ,seL4_CapInitThreadPD, vaddr, seL4_AllRights, seL4_IA32_Default_VMAttributes);
-	 //res = seL4_IA32_Page_Map(offs ,offs+1, vaddr, seL4_AllRights, seL4_IA32_Default_VMAttributes);
-	 printf("page map result is %x\n", res);
-
-	 //now can access it
-	 char* p = (char*) vaddr;
-	 printf("current value at 0x%x is %d\n", vaddr, *p);
-	 *p=65;
-	 printf("new value is %d\n", *p);	//prints 65 (to serial output)
-	 */
-	//////////////////////////////////////////////////////////// map vram
-	seL4_Word vram = EGA_TEXT_FB_BASE;  // 0xB8000;
-	//seL4_Word vram = 0xA0000; //BIOS_PADDR_VIDEO_RAM_START
-
-	//find untyped device memory containing vram
-	printf("\n--- Device Untyped Details ---\n");
-	printf("Untyped Slot       Paddr      Bits\n");
-	int offset = info->untyped.end - info->untyped.start;
-	int numSlots = info->deviceUntyped.end - info->deviceUntyped.start;
-	int i;
-	for (i = 0; i < numSlots && info->untypedPaddrList[i + offset] < vram; i++) {
-		//this loop is from simple_stable_print() in libsimple
-		printf("%3d     0x%08x 0x%08x %d\n", i, info->deviceUntyped.start + i,
-				info->untypedPaddrList[i + offset],
-				info->untypedSizeBitsList[i + offset]);
-	}
-
-	i--;
-	seL4_CPtr capUntypedStart = info->deviceUntyped.start + i;
-	seL4_Word memUntypedStart = info->untypedPaddrList[i + offset];
-	seL4_CPtr numPages = (vram - memUntypedStart) / 4096 + 1;
-	seL4_CPtr empty = emptyStart + 1000; //assume slot is empty
-	seL4_CPtr capPagesStart = empty;
-	empty += numPages;
-
-	printf("capUntypedStart = 0x%x\n", capUntypedStart);
-	printf("memUntypedStart = 0x%x\n", memUntypedStart);
-	printf("numPages        = %d\n", numPages);
-	printf("memoryCap       = 0x%x\n", memoryCap);
-
-	//get numPages of memory so to get hold of VRAM area
-	res = seL4_Untyped_RetypeAtOffset(capUntypedStart,
-			seL4_IA32_4K, 0, 0,           // type, ,size_bits
-			cnodeCap, 0, 0,               // root, index, depth
-			capPagesStart, numPages);     // offset, num
-	printf("seL4_Untyped_RetypeAtOffset--seL4_IA32_4K: %x\n", res);
-
-	//create a page table
-	seL4_Word pt = empty++;
-	res = seL4_Untyped_RetypeAtOffset(memoryCap,
-			seL4_IA32_PageTableObject, 0,0,  // type, ,size_bits
-			cnodeCap, 0, 0,                  // root, index, depth
-			pt, 1);                          // offset, num
-	printf("seL4_Untyped_RetypeAtOffset--seL4_IA32_PageTableObject: %x\n", res);
-
-	//map page table to page directory
-	res = seL4_IA32_PageTable_Map(pt, seL4_CapInitThreadPD, vram,
-			seL4_IA32_Default_VMAttributes);
-	printf("seL4_IA32_PageTable_Map: %x\n", res);
-
-	//map vram page to page table
-	env->vram_cap = capPagesStart + numPages - 1;
-	res = seL4_IA32_Page_Map(env->vram_cap, seL4_CapInitThreadPD, vram,
-			seL4_AllRights, seL4_IA32_Default_VMAttributes);
-	printf("seL4_IA32_Page_Map: %x\n", res);
-
-	////////////////////////////////////////////////////////////////
-	return (void*) vram;
+	void* vram = ps_io_map(&env->io_ops.io_mapper, EGA_TEXT_FB_BASE,
+			0x1000, false, PS_MEM_NORMAL);
+	assert(vram != NULL);
+	return vram;
 }
 
-void unmapVideoRam(seL4_CPtr vram_cap) {
-	int error = seL4_IA32_Page_Unmap(vram_cap);
-	printf("seL4_IA32_Page_Unmap: %d\n", error);
+void unmapVideoRam(env_t env, void* vram) {
+	ps_io_unmap(&env->io_ops.io_mapper, vram, 0x1000);
 }
 
 void writeVideoRam(uint16_t* vram, int row) {
@@ -257,9 +162,13 @@ int main()
     platsupport_serial_setup_simple(NULL, &env.simple, &env.vka);
 
     simple_print(&env.simple);
-    printf("\n\n>>>>>>>>>> ega - write to VRAM <<<<<<<<<< \n\n");
+    printf("\n\n>>>>>>>>>> ega2 - write to VRAM <<<<<<<<<< \n\n");
 
     void* vram = mapVideoRam(&env);
     writeVideoRam((uint16_t*)vram, 5);
-    unmapVideoRam(env.vram_cap);
+
+    //hmm, unmap seems not to work in that the page is not unmapped
+    //from the real page table
+    //unmapVideoRam(&env, vram);
+    //writeVideoRam((uint16_t*)vram, 10);
 }
