@@ -220,6 +220,7 @@ int main()
 	printf("frame buffer mapped to vaddr: 0x%x \n", (unsigned int) vid);
 
 	writeVideoRam(vid, mib);
+	printVBE(env.bootinfo2);
 
 	printf("\ndone\n");
 }
