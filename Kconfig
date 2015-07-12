@@ -29,11 +29,13 @@ menu "seL4 Applications"
     source "apps/ega/Kconfig"
     source "apps/ega2/Kconfig"
     source "apps/graphics/Kconfig"
+    source "apps/graphics2/Kconfig"
     source "apps/loaddata/Kconfig"
     source "apps/loaddata2/Kconfig"
     source "apps/timer/Kconfig"
     source "apps/threads/Kconfig"
     source "apps/badges/Kconfig"
+
 endmenu
 
 menu "seL4 Libraries"

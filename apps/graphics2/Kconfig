@@ -8,8 +8,8 @@
 # @TAG(NICTA_BSD)
 #
 
-menuconfig APP_GRAPHICS
-    bool "graphics - Write to video RAM in graphics mode (320x200)"
+menuconfig APP_GRAPHICS2
+    bool "graphics2 - Write to video RAM and print some VBE info"
     default y
     depends on LIB_SEL4 && (LIB_MUSL_C || LIB_SEL4_C) && LIB_SEL4_PLAT_SUPPORT && LIB_SEL4_VKA && LIB_SEL4_TEST && LIB_SEL4_UTILS && LIB_UTILS
     help
