@@ -9,8 +9,8 @@
 #
 
 menuconfig APP_EGA
-    bool "Write to video RAM basic example"
+    bool "ega - Write to video RAM"
     default y
     depends on LIB_SEL4 && (LIB_MUSL_C || LIB_SEL4_C) && LIB_SEL4_PLAT_SUPPORT && LIB_SEL4_VKA && LIB_SEL4_TEST && LIB_SEL4_UTILS && LIB_UTILS
     help
-        Write to video RAM basic example
+        Write to video RAM - map page with regular system calls

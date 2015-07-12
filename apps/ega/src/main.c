@@ -34,6 +34,7 @@
 #include <sel4utils/process.h>
 
 #include <simple/simple.h>
+
 #ifdef CONFIG_KERNEL_STABLE
 #include <simple-stable/simple-stable.h>
 #else
@@ -58,20 +59,8 @@ struct env {
     vspace_t vspace;
     /* abtracts over kernel version and boot environment */
     simple_t simple;
-    cspacepath_t keyboardirq_path;	//jm
-    /* path for the default timer irq handler */
-    cspacepath_t irq_path;
-    #ifdef CONFIG_ARCH_ARM
-    /* frame for the default timer */
-    cspacepath_t frame_path;
-#elif CONFIG_ARCH_IA32
-    /* io port for the default timer */
-    seL4_CPtr io_port_cap;
-#endif
-    /* init data frame vaddr */
-    //test_init_data_t *init;
-    /* extra cap to the init data frame for mapping into the remote vspace */
-    //seL4_CPtr init_frame_cap_copy;
+    /* cap for vram page */
+    seL4_CPtr vram_cap;
 };
 
 
@@ -127,10 +116,11 @@ init_env(env_t env)
 
 //=============================================================================
 
-seL4_Word vram = 0xB8000; //BIOS_PADDR_VIDEO_RAM_TEXT_MODE_START, EGA_TEXT_FB_BASE
-//seL4_Word vram = 0xA0000;	//BIOS_PADDR_VIDEO_RAM_START
-
-void mapVideoRam(seL4_BootInfo *info) {
+/*
+ * Map video RAM with regular system calls.
+ */
+void* mapVideoRam(env_t env) {
+	seL4_BootInfo *info = (seL4_BootInfo *) env->simple.data;  //bootinfo
 	seL4_CPtr cnodeCap = seL4_CapInitThreadCNode; //the CPtr of the root task's CNode
 	seL4_Word emptyStart = info->empty.start; //start of the empty region in cnodeCap
 	seL4_CPtr memoryCap = seL4_CapNull;  //CPtr to largest untyped memory object
@@ -172,8 +162,8 @@ void mapVideoRam(seL4_BootInfo *info) {
 	 printf("new value is %d\n", *p);	//prints 65 (to serial output)
 	 */
 	//////////////////////////////////////////////////////////// map vram
-	seL4_Word vram = 0xB8000;
-	//seL4_Word vram = 0xA0000;
+	seL4_Word vram = EGA_TEXT_FB_BASE;  // 0xB8000;
+	//seL4_Word vram = 0xA0000; //BIOS_PADDR_VIDEO_RAM_START
 
 	//find untyped device memory containing vram
 	printf("\n--- Device Untyped Details ---\n");
@@ -192,7 +182,7 @@ void mapVideoRam(seL4_BootInfo *info) {
 	seL4_CPtr capUntypedStart = info->deviceUntyped.start + i;
 	seL4_Word memUntypedStart = info->untypedPaddrList[i + offset];
 	seL4_CPtr numPages = (vram - memUntypedStart) / 4096 + 1;
-	seL4_CPtr empty = emptyStart+1000;
+	seL4_CPtr empty = emptyStart + 1000; //assume slot is empty
 	seL4_CPtr capPagesStart = empty;
 	empty += numPages;
 
@@ -222,13 +212,28 @@ void mapVideoRam(seL4_BootInfo *info) {
 	printf("seL4_IA32_PageTable_Map: %x\n", res);
 
 	//map vram page to page table
-	res = seL4_IA32_Page_Map(capPagesStart + numPages - 1, seL4_CapInitThreadPD, vram,
+	env->vram_cap = capPagesStart + numPages - 1;
+	res = seL4_IA32_Page_Map(env->vram_cap, seL4_CapInitThreadPD, vram,
 			seL4_AllRights, seL4_IA32_Default_VMAttributes);
 	printf("seL4_IA32_Page_Map: %x\n", res);
 
 	////////////////////////////////////////////////////////////////
+	return (void*) vram;
 }
 
+void unmapVideoRam(seL4_CPtr vram_cap) {
+	int error = seL4_IA32_Page_Unmap(vram_cap);
+	printf("seL4_IA32_Page_Unmap: %d\n", error);
+}
+
+void writeVideoRam(uint16_t* vram, int row) {
+	printf("VRAM mapped at: 0x%x\n", (unsigned int) vram);
+
+	const int width = 80;
+	for (int col = 0; col < 80; col++) {
+		vram[width * row + col] =  ('0' + col) | (col << 8);
+	}
+}
 
 //=============================================================================
 int main()
@@ -253,17 +258,8 @@ int main()
 
     simple_print(&env.simple);
     printf("\n\n>>>>>>>>>> ega - write to VRAM <<<<<<<<<< \n\n");
-    mapVideoRam(info);
 
-	char *corner = (char*) vram;
-	printf("VRAM: |%c|\n", *corner);
-
-	//write across row 5
-	const int row = 5;
-	char *p = corner + (80 * 2 * row);
-	for (int i = 0; i < 80; i++) {
-		*p++ = '0' + i;
-		*p++ = i;	//background
-
-	}
+    void* vram = mapVideoRam(&env);
+    writeVideoRam((uint16_t*)vram, 5);
+    unmapVideoRam(env.vram_cap);
 }
