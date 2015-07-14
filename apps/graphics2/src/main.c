@@ -13,7 +13,6 @@
  * HOWTO:
  * make menuconfig
  * 		=> goto  : Boot options -> enable linear graphics mode
- * 		=> select: select 640x480, 8 colors
  * make
  * make run-cdrom
  */
@@ -106,6 +105,7 @@ init_env(env_t env)
     /* initialize boot information */
     env->bootinfo  = seL4_GetBootInfo();
     env->bootinfo2 = seL4_IA32_GetBootInfo();
+    assert(env->bootinfo2); // boot kernel in graphics mode
 
     /* initialize libsel4simple, which abstracts away which kernel version
      * we are running on */
@@ -113,7 +113,7 @@ init_env(env_t env)
     //experimental kernel
     simple_stable_init_bootinfo(&env->simple, env->bootinfo);
 #else
-    //master kernel (may not work)
+    //master kernel
     simple_default_init_bootinfo(&env->simple, env->bootinfo);
 #endif
 
@@ -145,8 +145,9 @@ init_env(env_t env)
 }
 //=============================================================================
 
-void* mapVideoRam(env_t env, seL4_VBEModeInfoBlock* mib) {
-	size_t size = mib->xRes * mib->xRes;
+static void*
+mapVideoRam(env_t env, seL4_VBEModeInfoBlock* mib) {
+	size_t size = mib->yRes * mib->linBytesPerScanLine;
 	void* vram = ps_io_map(&env->io_ops.io_mapper,
 			mib->physBasePtr,
 			size,
@@ -160,12 +161,14 @@ void* mapVideoRam(env_t env, seL4_VBEModeInfoBlock* mib) {
  * @param vid base address of frame buffer
  *             (this virtual address is not mapped 1:1)
  */
-void writeVideoRam(void* vid, seL4_VBEModeInfoBlock* mib) {
-	char* p = (char*) vid;
-	size_t size = mib->xRes * mib->xRes;
+static void
+writeVideoRam(void* vid, seL4_VBEModeInfoBlock* mib) {
+	uint8_t* p = (uint8_t*) vid;
+	size_t size = mib->yRes * mib->linBytesPerScanLine;
 	printf("pages: ");
 	for (int i = 0; i < size; i++) {
-		*(p + i) = i % 42; //generates some pattern
+		/* set pixel; depending on color depth, one pixel is 1, 2, or 3 bytes */
+		*(p + i) = i % 256; //generates some pattern
 		if (i % PAGE_SIZE_4K == 0) {
 			printf("."); // if page is mapped, we see a dot
 		}
@@ -173,15 +176,16 @@ void writeVideoRam(void* vid, seL4_VBEModeInfoBlock* mib) {
 	printf("\n");
 }
 
-void printVBE(seL4_IA32_BootInfo* bootinfo2) {
+static void
+printVBE(seL4_IA32_BootInfo* bootinfo2) {
 	seL4_VBEInfoBlock* ib      = &env.bootinfo2->vbeInfoBlock;
 	seL4_VBEModeInfoBlock* mib = &env.bootinfo2->vbeModeInfoBlock;
 
 	printf("\n");
 	printf("vbeMode: 0x%x\n", bootinfo2->vbeMode);
-	printf("VESA mode=%d; linear frame buffer=%d\n",
+	printf("  VESA mode=%d; linear frame buffer=%d\n",
 			bootinfo2->vbeMode & ( 1 << 8) ? 1:0,
-					bootinfo2->vbeMode & ( 1 << 14)? 1:0);
+			bootinfo2->vbeMode & ( 1 << 14)? 1:0);
 	printf("vbeInterfaceSeg: 0x%x\n", bootinfo2->vbeInterfaceSeg);
 	printf("vbeInterfaceOff: 0x%x\n", bootinfo2->vbeInterfaceOff);
 	printf("vbeInterfaceLen: 0x%x\n", bootinfo2->vbeInterfaceLen);
@@ -191,13 +195,60 @@ void printVBE(seL4_IA32_BootInfo* bootinfo2) {
 			ib->signature[1],
 			ib->signature[2],
 			ib->signature[3]);
-	printf("ib->version: %x\n", ib->version);
-	//printf("ib->oemStringPtr: %x\n", ib->oemStringPtr);
-	printf("mib->xRes: %d\n", mib->xRes);
-	printf("mib->yRes: %d\n", mib->yRes);
-	printf("mib->planes: %d\n", mib->planes);
-	printf("mib->banks: %d\n", mib->banks);
-	printf("mib->physBasePtr: %x\n", mib->physBasePtr);
+	printf("ib->version: %x\n", ib->version); //BCD
+
+	printf ("===seL4_VBEModeInfoBlock===========\n");
+	printf ("modeAttr: 0x%x\n", mib->modeAttr);
+	printf ("winAAttr: 0x%x\n", mib->winAAttr);
+	printf ("winBAttr: 0x%x\n", mib->winBAttr);
+	printf ("winGranularity: %d\n", mib->winGranularity);
+	printf ("winSize: %d\n", mib->winSize);
+	printf ("winASeg: 0x%x\n", mib->winASeg);
+	printf ("winBSeg: 0x%x\n", mib->winBSeg);
+	printf ("winFuncPtr: 0x%x\n", mib->winFuncPtr);
+	printf ("bytesPerScanLine: %d\n", mib->bytesPerScanLine);
+	/* VBE 1.2+ */
+	printf ("xRes: %d\n", mib->xRes);
+	printf ("yRes: %d\n", mib->yRes);
+	printf ("xCharSize: %d\n", mib->xCharSize);
+	printf ("yCharSize: %d\n", mib->yCharSize);
+	printf ("planes: %d\n", mib->planes);
+	printf ("bitsPerPixel: %d\n", mib->bitsPerPixel);
+	printf ("banks: %d\n", mib->banks);
+	printf ("memoryModel: 0x%x\n", mib->memoryModel);
+	printf ("bankSize: %d\n", mib->bankSize);
+	printf ("imagePages: %d\n", mib->imagePages);
+	printf ("reserved1: 0x%x\n", mib->reserved1);
+
+	printf ("redLen: %d\n", mib->redLen);
+	printf ("redOff: %d\n", mib->redOff);
+	printf ("greenLen: %d\n", mib->greenLen);
+	printf ("greenOff: %d\n", mib->greenOff);
+	printf ("blueLen: %d\n", mib->blueLen);
+	printf ("blueOff: %d\n", mib->blueOff);
+	printf ("rsvdLen: %d\n", mib->rsvdLen);
+	printf ("rsvdOff: %d\n", mib->rsvdOff);
+	printf ("directColorInfo: %d\n", mib->directColorInfo);  /* direct color mode attributes */
+
+	/* VBE 2.0+ */
+	printf ("physBasePtr: %x\n", mib->physBasePtr);
+	//printf ("reserved2: %d\n", mib->reserved2[6]);
+
+	/* VBE 3.0+ */
+	printf ("linBytesPerScanLine: %d\n", mib->linBytesPerScanLine);
+	printf ("bnkImagePages: %d\n", mib->bnkImagePages);
+	printf ("linImagePages: %d\n", mib->linImagePages);
+	printf ("linRedLen: %d\n", mib->linRedLen); // bit mask for pixel
+	printf ("linRedOff: %d\n", mib->linRedOff);
+	printf ("linGreenLen: %d\n", mib->linGreenLen);
+	printf ("linGreenOff: %d\n", mib->linGreenOff);
+	printf ("linBlueLen: %d\n", mib->linBlueLen);
+	printf ("linBlueOff: %d\n", mib->linBlueOff);
+	printf ("linRsvdLen: %d\n", mib->linRsvdLen);
+	printf ("linRsvdOff: %d\n", mib->linRsvdOff); // bit mask for pixel
+	printf ("maxPixelClock: %d\n", mib->maxPixelClock);
+	printf ("modeId: %d\n", mib->modeId);
+	printf ("depth: %d\n", mib->depth);
 }
 
 //=============================================================================
@@ -213,7 +264,6 @@ int main()
 	simple_print(&env.simple);
 	printf("\n\n>>>>>>>>>> graphics2 - write to VRAM <<<<<<<<<< \n\n");
 
-	//seL4_VBEInfoBlock* ib      = &env.bootinfo2->vbeInfoBlock;
 	seL4_VBEModeInfoBlock* mib = &env.bootinfo2->vbeModeInfoBlock;
 
 	void* vid = mapVideoRam(&env, mib);
