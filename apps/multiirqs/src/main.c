@@ -13,14 +13,28 @@
 #include <sel4/arch/bootinfo.h>
 #include <allocman/bootstrap.h>
 #include <allocman/vka.h>
+#include <platsupport/chardev.h>
 #include <sel4platsupport/platsupport.h>
 #include <sel4platsupport/timer.h>
+#include <sel4platsupport/arch/io.h>
 #include <sel4utils/vspace.h>
+#include <vka/object_capops.h>
+
 #ifdef CONFIG_KERNEL_STABLE
 #include <simple-stable/simple-stable.h>
 #else
 #include <simple-default/simple-default.h>
 #endif
+
+
+typedef struct _chardev_t {
+    /* platsupport char device */
+    ps_chardevice_t dev;
+    /* IRQHandler cap (with cspace path) */
+    cspacepath_t handler;
+    /* endpoint cap (with cspace path) device is waiting for IRQ */
+    cspacepath_t ep;
+} chardev_t;
 
 
 
@@ -88,8 +102,73 @@ setup_system()
 }
 
 
+// creates IRQHandler cap "handler" for IRQ "irq"
+static void
+get_irqhandler_cap(int irq, cspacepath_t* handler)
+{
+    seL4_CPtr cap;
+    // get a cspace slot
+    UNUSED int err = vka_cspace_alloc(&vka, &cap);
+    assert(err == 0);
+
+    // convert allocated cptr to a cspacepath, for use in
+    // operations such as Untyped_Retype
+    vka_cspace_make_path(&vka, cap, handler);
+
+    // exec seL4_IRQControl_Get(seL4_CapIRQControl, irq, ...)
+    // to get an IRQHandler cap for IRQ "irq"
+    err = simple_get_IRQ_control(&simple, irq, *handler);
+    assert(err == 0);
+}
+
+
+// finalize device setup
+// hook up endpoint (dev->ep) with IRQ of char device (dev->dev)
+void set_devEp(chardev_t* dev) {
+    // Loop through all IRQs and get the one device needs to listen to
+    // We currently assume there it only needs one IRQ.
+    int irq;
+    for (irq = 0; irq < 256; irq++) {
+        if (ps_cdev_produces_irq(&dev->dev, irq)) {
+            break;
+        }
+    }
+    printf ("irq=%d\n", irq);
+
+    //create IRQHandler cap
+    get_irqhandler_cap(irq, &dev->handler);
+
+    /* Assign AEP to the IRQ handler. */
+    UNUSED int err = seL4_IRQHandler_SetEndpoint(
+            dev->handler.capPtr, dev->ep.capPtr);
+    assert(err == 0);
+
+    //read once: not sure why, but it does not work without it, it seems
+    ps_cdev_getchar(&dev->dev);
+    err = seL4_IRQHandler_Ack(dev->handler.capPtr);
+    assert(err == 0);
+}
+
+
+void handle_cdev_event(char *msg, chardev_t* dev) {
+    printf("handle_cdev_event(): %s\n", msg);
+    for (;;) {
+        //int c = __arch_getchar();
+        int c = ps_cdev_getchar(&dev->dev);
+        if (c == EOF) {
+            //read till we get EOF
+            break;
+        }
+        printf("You typed [%c]\n", c);
+    }
+
+    UNUSED int err = seL4_IRQHandler_Ack(dev->handler.capPtr);
+    assert(err == 0);
+}
+
 int main()
 {
+    UNUSED int err;
     setup_system();
 
     /* enable serial driver */
@@ -97,6 +176,69 @@ int main()
 
     printf("\n\n>>>>>>>>>> multi-irqs <<<<<<<<<< \n\n");
     simple_print(&simple);
+
+    /* TODO: lots of duplicate code here ... */
+    chardev_t serial1;
+    chardev_t serial2;
+    chardev_t keyboard;
+
+    struct ps_io_ops    opsIO;
+    sel4platsupport_get_io_port_ops(&opsIO.io_port_ops, &simple);
+    ps_chardevice_t *ret;
+    ret = ps_cdev_init(PS_SERIAL0, &opsIO, &serial1.dev);
+    assert(ret != NULL);
+    ret = ps_cdev_init(PS_SERIAL1, &opsIO, &serial2.dev);
+    assert(ret != NULL);
+    ret = ps_cdev_init(PC99_KEYBOARD_PS2, &opsIO, &keyboard.dev);
+    assert(ret != NULL);
+
+    ///////////////////
+
+    /* async endpoint*/
+    vka_object_t aep;
+
+    // create endpoint
+    err = vka_alloc_async_endpoint(&vka, &aep);
+    assert(err == 0);
+
+    seL4_CapData_t badge1 = seL4_CapData_Badge_new (1);
+    //mint a badged endpoint with badge value 1
+    err = vka_mint_object(&vka, &aep, &serial1.ep, seL4_AllRights, badge1);
+    assert(err == 0);
+
+    seL4_CapData_t badge2 = seL4_CapData_Badge_new (2);
+    //mint a badged endpoint with badge value 2
+    err = vka_mint_object(&vka, &aep, &serial2.ep, seL4_AllRights, badge2);
+    assert(err == 0);
+
+    seL4_CapData_t badge3 = seL4_CapData_Badge_new (4);
+    //mint a badged endpoint with badge value 4
+    err = vka_mint_object(&vka, &aep, &keyboard.ep, seL4_AllRights, badge3);
+    assert(err == 0);
+
+    ///////////////////
+    set_devEp(&serial1);
+    set_devEp(&serial2);
+    set_devEp(&keyboard);
+
+    for (;;) {
+        seL4_Word sender_badge;
+        printf("waiting:\n");
+        UNUSED seL4_MessageInfo_t msg = seL4_Wait(aep.cptr, &sender_badge);
+
+        printf("seL4_Wait returned with badge: %d\n", sender_badge);
+
+        if (sender_badge & 1) {
+            handle_cdev_event("serial1", &serial1);
+        }
+        if (sender_badge & 2) {
+            handle_cdev_event("serial2", &serial2);
+        }
+        if (sender_badge & 4) {
+            handle_cdev_event("keyboard", &keyboard);
+        }
+    }
+
     return 0;
 }
 
