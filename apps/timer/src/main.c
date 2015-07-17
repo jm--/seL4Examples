@@ -45,10 +45,16 @@ static char memPool[POOL_SIZE];
 /* for virtual memory bootstrapping */
 static sel4utils_alloc_data_t allocData;
 ///
-/* initialized timer */
-seL4_timer_t *timer;
-/* aep for timer */
+
+/* platsupport (periodic) timer */
+seL4_timer_t* timer;
+
+/* platsupport TSC based timer */
+seL4_timer_t* tsc_timer;
+
+/* async endpoint for periodic timer */
 vka_object_t timer_aep;
+
 
 // ======================================================================
 
@@ -94,6 +100,7 @@ setup_system()
 }
 
 
+// gets called every 10 ms
 static void
 do_something()
 {
@@ -101,12 +108,15 @@ do_something()
 
     count %= 100;
     if (count++ == 0) {
-        //only every 100th:
+        //only every 100th (i.e., every second)
 
         //current timer value (in ns)
         //calls pit_get_time(const pstimer_t* device)
         uint64_t t = timer_get_time(timer->timer);
-        printf("\ntimer value: %llu ns \n", t);
+        printf("\ntimer value: %llu (ns) \n", t);
+
+        uint64_t tsc_time = timer_get_time(tsc_timer->timer);
+        printf("time since start: %llu (s) \n", tsc_time / NS_IN_S);
     } else {
         printf(".");
     }
@@ -121,7 +131,7 @@ do_something()
  */
 
 static void
-init_timer()
+init_timers()
 {
     UNUSED int err = vka_alloc_async_endpoint(&vka, &timer_aep);
     assert(err == 0);
@@ -130,6 +140,19 @@ init_timer()
     // manually; "simple" knows how to produce them when required
     timer = sel4platsupport_get_default_timer(&vka, &vspace, &simple, timer_aep.cptr);
     assert(timer != NULL);
+
+
+    printf("init tsc_timer ---\n");
+    fflush(stdout);
+    // May generates some error messages (see tsc_calculate_frequency()).
+    // Generates a TSC backed seL4_timer_t; the passed in "timer"
+    // is only used for setting up the TSC timer (for calculateding freq).
+    // All subsequent timer_get_time() calls read the TSC (and not the PIT).
+    // So this provides an up counting clock.
+    tsc_timer = sel4platsupport_get_tsc_timer(timer);
+    assert(tsc_timer != NULL);
+    printf("init tsc_timer --- done");
+
 }
 
 
@@ -184,8 +207,8 @@ int main(void)
     uint64_t tsc = rdtsc_pure();
     printf("tsc=%llu\n", tsc);
 
-    /* initialize the timer */
-    init_timer();
+    /* initialize the timers */
+    init_timers();
 
     test_interrupt();
     return 0;
