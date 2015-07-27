@@ -37,6 +37,62 @@ typedef struct _chardev_t {
 } chardev_t;
 
 
+//////////////////////////////////////////////////////
+/*  Types and prototypes are from
+ *  keyboard_chardev.c and keyboard_ps2.h in the platsupport library.
+ *  I guess one is not supposed to use them directly. :->
+ */
+
+#define KEYBOARD_PS2_STATE_NORMAL 0x1
+#define KEYBOARD_PS2_STATE_IGNORE 0x2
+#define KEYBOARD_PS2_STATE_EXTENDED_MODE 0x4
+#define KEYBOARD_PS2_STATE_RELEASE_KEY 0x8
+#define KEYBOARD_PS2_EVENTCODE_RELEASE 0xF0
+#define KEYBOARD_PS2_EVENTCODE_EXTENDED 0xE0
+#define KEYBOARD_PS2_EVENTCODE_EXTENDED_PAUSE 0xE1
+
+typedef struct keycode_state {
+    bool keystate[256];
+
+    bool scroll_lock;
+    bool num_lock;
+    bool caps_lock;
+    bool led_state_changed;
+
+    /* Optional callback, called when a vkey has been pressed or released. */
+    void (*handle_keyevent_callback)(int16_t vkey, bool pressed, void *cookie);
+    /* Optional callback, called when a character has been typed. */
+    void (*handle_chartyped_callback)(int c, void *cookie);
+    /* Optional callback, called when num/scroll/caps lock LED state has changed. */
+    void (*handle_led_state_changed_callback)(void *cookie);
+
+} keycode_state_t;
+
+typedef struct keyboard_key_event {
+    int16_t vkey;
+    bool pressed;
+} keyboard_key_event_t;
+
+struct keyboard_state {
+    ps_io_ops_t ops;
+    int state;
+    int num_ignore;
+    void (*handle_event_callback)(keyboard_key_event_t ev, void *cookie);
+};
+
+static struct keyboard_state my_kb_state;
+static keycode_state_t my_kc_state;
+
+/* prototypes of platsupport internal functions */
+keyboard_key_event_t
+keyboard_poll_ps2_keyevent(struct keyboard_state *state);
+
+int16_t
+keycode_process_vkey_event_to_char (keycode_state_t *s,
+        int32_t vkey, bool pressed, void* cookie);
+
+//////////////////////////////////////////////////////
+
 
 /* memory management: Virtual Kernel Allocator (VKA) interface and VSpace */
 static vka_t vka;
@@ -58,9 +114,10 @@ static char memPool[POOL_SIZE];
 /* for virtual memory bootstrapping */
 static sel4utils_alloc_data_t allocData;
 
-
 /* platsupport IO */
 static struct ps_io_ops opsIO;
+
+
 // ======================================================================
 
 /*
@@ -127,9 +184,23 @@ get_irqhandler_cap(int irq, cspacepath_t* handler)
 }
 
 
+static void
+init_keyboard_state () {
+    //mirroring platsupport's internal keyboard state; yikes
+    my_kb_state.state = KEYBOARD_PS2_STATE_NORMAL;
+    my_kb_state.ops = opsIO;   // keyboard.dev.ioops
+    my_kb_state.num_ignore = 0;
+    my_kb_state.handle_event_callback = NULL;
+
+    memset(&my_kc_state, 0, sizeof(keycode_state_t));
+    my_kc_state.num_lock = true;
+}
+
+
 // finalize device setup
 // hook up endpoint (dev->ep) with IRQ of char device (dev->dev)
-void set_devEp(chardev_t* dev) {
+static void
+init_keyboard(chardev_t* dev) {
 
     ps_chardevice_t *ret;
     ret = ps_cdev_init(PC99_KEYBOARD_PS2, &opsIO, &dev->dev);
@@ -161,23 +232,90 @@ void set_devEp(chardev_t* dev) {
     ps_cdev_getchar(&dev->dev);
     err = seL4_IRQHandler_Ack(dev->handler.capPtr);
     assert(err == 0);
+
+    init_keyboard_state();
 }
 
 
-void handle_keyboard_event(chardev_t* dev) {
-    printf("handle_keyboard_event()\n");
-    for (;;) {
-        //int c = __arch_getchar();
-        int c = ps_cdev_getchar(&dev->dev);
-        if (c == EOF) {
-            //read till we get EOF
-            break;
-        }
-        printf("You typed [%c]\n", c);
+static const char*
+get_vkey_name(uint16_t vkey)
+{
+    switch(vkey) {
+    case 0x25:  return("left arrow");
+    case 0x26:  return("up arrow");
+    case 0x27:  return("right arrow");
+    case 0x28:  return("down arrow");
+    //etc. (there is keycode_vkey_desc() in keyboard_vkey.c)
+    }
+    return "yep, you pressed some extended key";
+}
+
+
+/* There seems to be a bug in keyboard_state_push_ps2_keyevent().
+ * Parameter ps2_keyevent should be uint16_t and not int16_t, I think.
+ */
+UNUSED static void
+check_keyboard1(struct ps_chardevice *device) {
+    keyboard_key_event_t ev = keyboard_poll_ps2_keyevent(&my_kb_state);
+    int extmode = my_kb_state.state & KEYBOARD_PS2_STATE_EXTENDED_MODE;
+
+    if (extmode) {
+        assert(ev.vkey == -1 && ev.pressed  == 0);
+        ev= keyboard_poll_ps2_keyevent(&my_kb_state);
     }
 
-    UNUSED int err = seL4_IRQHandler_Ack(dev->handler.capPtr);
-    assert(err == 0);
+    if (extmode &&  (my_kb_state.state & KEYBOARD_PS2_STATE_RELEASE_KEY)) {
+        ev= keyboard_poll_ps2_keyevent(&my_kb_state);
+    }
+
+    if (ev.vkey != -1) {
+        printf("key %s: extmode=%d vkey=%d    ",
+                ev.pressed ? "DOWN":"UP  ", (extmode > 0), ev.vkey);
+        if (extmode) {
+            printf("(%s)", get_vkey_name(ev.vkey));
+        }
+        printf("\n");
+    }
+
+    int16_t c = keycode_process_vkey_event_to_char(&my_kc_state, ev.vkey, ev.pressed, NULL);
+    if (c != -1) {
+        printf("char: k=%d [%c]\n", c, c);
+    }
+
+#ifdef CONFIG_APP_KEYBOARD3_SHOWPRESSED
+    int i;
+    for (i =0; i<256 && my_kc_state.keystate[i] == 0 ; i++) {
+        //check if a key is pressed
+    }
+    if (i < 256) {
+        printf("currently pressed: ");
+        for (i = 0; i < 256; i++) {
+            if (my_kc_state.keystate[i]) {
+                printf("%d ", i);
+            }
+        }
+        printf("\n");
+    }
+#endif
+}
+
+
+UNUSED static void
+check_keyboard2(struct ps_chardevice *device)
+{
+    keyboard_key_event_t ev = keyboard_poll_ps2_keyevent(&my_kb_state);
+    printf("state=0x%x, vkey=%d (0x%x), pressed=%d, ",
+            my_kb_state.state, ev.vkey, ev.vkey, ev.pressed);
+
+    int16_t c = keycode_process_vkey_event_to_char(&my_kc_state, ev.vkey, ev.pressed, NULL);
+    printf("ord=%d chr=[%c]\n", c, c);
+    printf("currently pressed: ");
+    for (int i = 0; i < 256; i++) {
+        if (my_kc_state.keystate[i]) {
+            printf("%d ", i);
+        }
+    }
+    printf("\n");
 }
 
 
@@ -192,13 +330,20 @@ int main()
     printf("\n\n>>>>>>>>>> keyboard3 <<<<<<<<<< \n\n");
 
     chardev_t keyboard;
-    set_devEp(&keyboard);
+    init_keyboard(&keyboard);
 
+#ifdef CONFIG_APP_KEYBOARD3_POLL
+    for (;;) {
+        check_keyboard1(&keyboard.dev);
+    }
+#else
     for (int i;;i++) {
         printf("===waiting (%d) ==================================\n", i);
         seL4_Wait(keyboard.ep.cptr, NULL);
-        handle_keyboard_event(&keyboard);
+        check_keyboard2(&keyboard.dev);
+        err = seL4_IRQHandler_Ack(keyboard.handler.capPtr);
+        assert(err == 0);
     }
-
+#endif
     return 0;
 }
