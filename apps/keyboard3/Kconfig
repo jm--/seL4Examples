@@ -11,3 +11,27 @@ menuconfig APP_KEYBOARD3
     depends on LIB_SEL4 && (LIB_MUSL_C || LIB_SEL4_C) && LIB_SEL4_PLAT_SUPPORT && LIB_SEL4_VKA && LIB_SEL4_UTILS && LIB_UTILS
     help
         Test program for low level keyboard access.
+
+    choice
+        prompt "Method"
+        depends on APP_KEYBOARD3
+        default APP_KEYBOARD3_WAIT
+        help
+            Select type of test program.
+
+        config APP_KEYBOARD3_POLL
+            bool "Poll keyboard"
+            help
+                Use busy loop and poll keyboard.
+
+        config APP_KEYBOARD3_WAIT
+            bool "Wait for interrupt"
+            help
+                Call seL4_Wait to explicitly wait for IRQ.
+    endchoice
+
+	menuconfig APP_KEYBOARD3_SHOWPRESSED
+	    bool "      Show list of currently pressed keys"
+	    depends on APP_KEYBOARD3 && APP_KEYBOARD3_POLL
+	    default n
+	    help

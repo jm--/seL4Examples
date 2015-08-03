@@ -197,8 +197,6 @@ init_keyboard_state () {
 }
 
 
-// finalize device setup
-// hook up endpoint (dev->ep) with IRQ of char device (dev->dev)
 static void
 init_keyboard(chardev_t* dev) {
 
@@ -251,8 +249,8 @@ get_vkey_name(uint16_t vkey)
 }
 
 
-/* There seems to be a bug in keyboard_state_push_ps2_keyevent().
- * Parameter ps2_keyevent should be uint16_t and not int16_t, I think.
+/* There was a bug in keyboard_state_push_ps2_keyevent().
+ * see https://github.com/seL4/libplatsupport/issues/2
  */
 UNUSED static void
 check_keyboard1(struct ps_chardevice *device) {
@@ -332,12 +330,13 @@ int main()
     chardev_t keyboard;
     init_keyboard(&keyboard);
 
+    //
 #ifdef CONFIG_APP_KEYBOARD3_POLL
     for (;;) {
         check_keyboard1(&keyboard.dev);
     }
 #else
-    for (int i;;i++) {
+    for (int i = 0;;i++) {
         printf("===waiting (%d) ==================================\n", i);
         seL4_Wait(keyboard.ep.cptr, NULL);
         check_keyboard2(&keyboard.dev);
