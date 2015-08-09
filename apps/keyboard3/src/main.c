@@ -199,10 +199,19 @@ init_keyboard_state () {
 
 static void
 init_keyboard(chardev_t* dev) {
-
+    int n = 0;
     ps_chardevice_t *ret;
-    ret = ps_cdev_init(PC99_KEYBOARD_PS2, &opsIO, &dev->dev);
-    assert(ret != NULL);
+    do {
+        ret = ps_cdev_init(PC99_KEYBOARD_PS2, &opsIO, &dev->dev);
+        // The code to initialize the keyboard in platsupport
+        // does not return PS2_CONTROLLER_SELF_TEST_OK when a key is pressed
+        // before or during initialization or something?
+        if (n++ == 100) {
+            // We retry a couple of times before giving up.
+            printf("Failed to initialize PS2 keyboard.\n");
+            exit(EXIT_FAILURE);
+        }
+    } while (ret == NULL);
 
     // Loop through all IRQs and get the one device needs to listen to
     // We currently assume there it only needs one IRQ.

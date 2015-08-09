@@ -31,7 +31,7 @@ menuconfig APP_KEYBOARD3
     endchoice
 
 	menuconfig APP_KEYBOARD3_SHOWPRESSED
-	    bool "      Show list of currently pressed keys"
+	    bool "Show list of currently pressed keys"
 	    depends on APP_KEYBOARD3 && APP_KEYBOARD3_POLL
 	    default n
 	    help
