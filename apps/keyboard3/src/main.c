@@ -160,7 +160,9 @@ setup_system()
     bootstrap_configure_virtual_pool(allocman, vaddr, VIRT_POOL_SIZE,
             seL4_CapInitThreadPD);
 
-    sel4platsupport_get_io_port_ops(&opsIO.io_port_ops, &simple);
+    err = sel4platsupport_get_io_port_ops(&opsIO.io_port_ops, &simple);
+    assert(err == 0);
+
 }
 
 
@@ -197,11 +199,19 @@ init_keyboard_state () {
 }
 
 
+
+static void
+flush_keyboard(struct ps_chardevice *device);
+
 static void
 init_keyboard(chardev_t* dev) {
     int n = 0;
     ps_chardevice_t *ret;
     do {
+        //ps_cdev_init() tries to set the keyboard to "scan code set 2"
+        //(unfortunately, my laptop and external usb keyboard refuse and
+        //operate in "scan code set 1" mode;
+        //I blame buggy "legacy PS2" mode in BIOS)
         ret = ps_cdev_init(PC99_KEYBOARD_PS2, &opsIO, &dev->dev);
         // The code to initialize the keyboard in platsupport
         // does not return PS2_CONTROLLER_SELF_TEST_OK when a key is pressed
@@ -235,12 +245,42 @@ init_keyboard(chardev_t* dev) {
     err = seL4_IRQHandler_SetEndpoint(dev->handler.capPtr, dev->ep.cptr);
     assert(err == 0);
 
+    init_keyboard_state();
+
     //read once: not sure why, but it does not work without it, it seems
-    ps_cdev_getchar(&dev->dev);
+    //(update: I think this is to flush the keyboard buffer, so it might be
+    //actually better to read in a loop till buffer is empty)
+    //(update2: Return code of ps_cdev_getchar() cannot be used to determine
+    //whether or not (hardware keyboard output) buffer is empty because buffer
+    //could contain a value that does not generate a vkey, for example ACK (0xfa).
+
+// this cannot (reliably) be used to flush the keyboard buffer, I think:
+//    int c = ps_cdev_getchar(&dev->dev);
+//    while (c != EOF) {
+//        printf("keyboard init: c=%d=0x%x ", c, c);
+//        assert(err == 0);
+//        c = ps_cdev_getchar(&dev->dev);
+//    }
+
+    //update2: so better read a couple of times, no matter what
+
+// this does work, I think:
+//    for (int i = 0; i < 16; i++) {
+//        int c = ps_cdev_getchar(&dev->dev);
+//        printf("keyboard init: c=%d=0x%x\n", c, c);
+//    }
+
+    //update3:
+    //however, this is currently my best solution:
+    flush_keyboard(&dev->dev);
+
+    //again: it seems that when using seL4_Wait(), we need to flush the keyboard
+    //and call seL4_IRQHandler_Ack() before calling seL4_Wait(),
+    //otherwise seL4_Wait() will wait forever.
     err = seL4_IRQHandler_Ack(dev->handler.capPtr);
     assert(err == 0);
 
-    init_keyboard_state();
+    printf("done init\n");
 }
 
 
@@ -326,6 +366,49 @@ check_keyboard2(struct ps_chardevice *device)
 }
 
 
+/*
+ * Just print scan code; don't interpret state or anything
+ * Pressing (and releasing) the 'a' key will generate:
+ * 0x1e 0x9e      when in scan code set 1 (0x9e == 0x80 + 0x1e), and
+ * 0x1c 0xf0 0x1c when in scan code set 2
+ */
+static int
+check_keyboard3(struct ps_chardevice *device) {
+    static int n = 0;
+    static const uint32_t PORT_STATUS = 0x64;
+    static const uint32_t PORT_DATA = 0x60;
+
+    ps_io_port_ops_t *port_ops = &my_kb_state.ops.io_port_ops;
+
+    //check status register
+    uint32_t res = 0;
+    int error = ps_io_port_in(port_ops, PORT_STATUS, 1, &res);
+    assert(!error);
+    if ((res & 0x1) == 0) {
+        //buffer is empty
+        return -1;
+    }
+
+    //fetch one byte
+    res = 0;
+    error = ps_io_port_in(port_ops, PORT_DATA, 1, &res);
+    assert(!error);
+    printf("key: code = %3d = 0x%2x   (%d)\n", res, res, ++n);
+    return res;
+}
+
+
+UNUSED static void
+flush_keyboard(struct ps_chardevice *device) {
+    int c = check_keyboard3(device);
+    while (c != -1) {
+        printf("flush_keyboard\n");
+        c = check_keyboard3(device);
+    }
+    printf("done with flush_keyboard()\n");
+}
+
+
 int main()
 {
     UNUSED int err;
@@ -339,12 +422,15 @@ int main()
     chardev_t keyboard;
     init_keyboard(&keyboard);
 
+    printf("press some keys\n");
+
     //
 #ifdef CONFIG_APP_KEYBOARD3_POLL
     for (;;) {
         check_keyboard1(&keyboard.dev);
     }
-#else
+#endif
+#ifdef CONFIG_APP_KEYBOARD3_WAIT
     for (int i = 0;;i++) {
         printf("===waiting (%d) ==================================\n", i);
         seL4_Wait(keyboard.ep.cptr, NULL);
@@ -353,5 +439,12 @@ int main()
         assert(err == 0);
     }
 #endif
-    return 0;
+#ifdef CONFIG_APP_KEYBOARD3_SIMPLEPOLL
+    for (;;) {
+        check_keyboard3(&keyboard.dev);
+    }
+#endif
+
+    assert(!"invalid configuration");
+    return 1;
 }

@@ -15,12 +15,12 @@ menuconfig APP_KEYBOARD3
     choice
         prompt "Method"
         depends on APP_KEYBOARD3
-        default APP_KEYBOARD3_WAIT
+        default APP_KEYBOARD3_SIMPLEPOLL
         help
             Select type of test program.
 
         config APP_KEYBOARD3_POLL
-            bool "Poll keyboard"
+            bool "Poll keyboard (interpret keyboard state)"
             help
                 Use busy loop and poll keyboard.
 
@@ -28,6 +28,11 @@ menuconfig APP_KEYBOARD3
             bool "Wait for interrupt"
             help
                 Call seL4_Wait to explicitly wait for IRQ.
+
+        config APP_KEYBOARD3_SIMPLEPOLL
+            bool "Poll keyboard (just print scan codes)"
+            help
+                Use busy loop and poll keyboard (without interpreting state).
     endchoice
 
 	menuconfig APP_KEYBOARD3_SHOWPRESSED
