@@ -17,6 +17,34 @@
 static struct keyboard_state kb_state;
 static keycode_state_t kc_state;
 
+//jm--
+void
+keyboard_set_scanset(int scanset) {
+    kb_state.scanset = scanset;
+}
+
+//jm--
+int
+keyboard_poll_keyevent(int16_t* vkey)
+{
+    const char* keycode_vkey_desc(uint16_t vk);
+
+    int em1 = kb_state.state & KEYBOARD_PS2_STATE_EXTENDED_MODE;
+    int re1 = kb_state.state & KEYBOARD_PS2_STATE_RELEASE_KEY;
+
+    keyboard_key_event_t ev = keyboard_poll_ps2_keyevent(&kb_state);
+    int em2 = kb_state.state & KEYBOARD_PS2_STATE_EXTENDED_MODE;
+    int re2 = kb_state.state & KEYBOARD_PS2_STATE_RELEASE_KEY;
+
+    if (ev.vkey != -1) {
+        printf("key %s: %s extmode1=%d extmode2=%d release1=%d release2=%d vkey=%d=0x%x\n",
+                ev.pressed ? "DOWN":"UP  ", keycode_vkey_desc(ev.vkey),
+                (em1 > 0), (em2 > 0), (re1 > 0), (re2 > 0), ev.vkey, ev.vkey);
+    }
+    *vkey = ev.vkey;
+    return ev.pressed;
+}
+
 void
 keyboard_cdev_handle_led_changed(void *cookie)
 {

@@ -131,10 +131,6 @@ get_irqhandler_cap(int irq, cspacepath_t* handler)
 }
 
 
-static void
-flush_keyboard(struct ps_chardevice *device);
-
-
 static const int my_keyboard_irqs[] = {KEYBOARD_PS2_IRQ, -1};
 static const struct dev_defn my_keyboard_def = {
         .id      = PC99_KEYBOARD_PS2,
@@ -182,52 +178,11 @@ init_keyboard(chardev_t* dev) {
     assert(err == 0);
 
     //flush and ack keyboard
-    flush_keyboard(&dev->dev);
+    keyboard_flush(&opsIO);
     err = seL4_IRQHandler_Ack(dev->handler.capPtr);
     assert(err == 0);
 
     printf("done init\n");
-}
-
-
-/*
- * Just print scan code; don't interpret state or anything
- * Pressing (and releasing) the 'a' key will generate:
- * 0x1e 0x9e      when in scan code set 1 (0x9e == 0x80 + 0x1e), and
- * 0x1c 0xf0 0x1c when in scan code set 2
- */
-static int
-check_keyboard(struct ps_chardevice *device) {
-    static int n = 0;
-
-    ps_io_port_ops_t *port_ops = &opsIO.io_port_ops;
-
-    //check status register
-    uint32_t res = 0;
-    int error = ps_io_port_in(port_ops, PS2_IOPORT_CONTROL, 1, &res);
-    assert(!error);
-    if ((res & 0x1) == 0) {
-        //buffer is empty
-        return -1;
-    }
-
-    //fetch one byte
-    res = 0;
-    error = ps_io_port_in(port_ops, PS2_IOPORT_DATA, 1, &res);
-    assert(!error);
-    printf("key: code = %3d = 0x%2x   (%d)\n", res, res, ++n);
-    return res;
-}
-
-
-UNUSED static void
-flush_keyboard(struct ps_chardevice *device) {
-    int c = check_keyboard(device);
-    while (c != -1) {
-        printf("flush_keyboard\n");
-        c = check_keyboard(device);
-    }
-    printf("done with flush_keyboard()\n");
 }
 
 
@@ -239,14 +194,43 @@ int main()
     /* enable serial driver */
     platsupport_serial_setup_simple(NULL, &simple, &vka);
 
-    printf("\n\n>>>>>>>>>> keyboard3 <<<<<<<<<< \n\n");
+    printf("\n\n>>>>>>>>>> keyboard4 <<<<<<<<<< \n\n");
 
     chardev_t keyboard;
     init_keyboard(&keyboard);
 
-    printf("press some keys\n");
     for (;;) {
-        check_keyboard(&keyboard.dev);
+        // :) https://vimeo.com/37714632
+        printf("to start press any key\n"); //well, any key except extended keys
+        int scanset = keyboard_detect_scanset(&opsIO);
+        if (scanset == 1 || scanset == 2) {
+            keyboard_set_scanset(scanset);
+            printf("scanset %d detected\n", scanset);
+            break;
+        }
+        keyboard_flush(&opsIO);
+    }
+
+    for (;;) {
+        //test key event
+        printf("press some keys; press 'k' to change test\n");
+        for (;;) {
+            int16_t vkey;
+            int pressed = keyboard_poll_keyevent(&vkey);
+            if (vkey == 'K' && !pressed) {
+                break;
+            }
+        }
+
+        //test char
+        printf("press some keys; press 'l' to change test\n");
+        int c;
+        do {
+            c = ps_cdev_getchar(&keyboard.dev);
+            if (c != EOF) {
+                printf("%d 0x%x [%c]\n", c, c, c);
+            }
+        } while (c !='l' && c !='L');
     }
     return 0;
 }

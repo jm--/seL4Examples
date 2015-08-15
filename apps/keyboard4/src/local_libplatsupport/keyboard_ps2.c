@@ -137,6 +137,64 @@ keyboard_state_push_ps2_keyevent(struct keyboard_state *s, uint16_t ps2_keyevent
     return ev;
 }
 
+static keyboard_key_event_t
+keyboard_state_push_ps2_keyevent_set1(struct keyboard_state *s, uint16_t ps2_keyevent)
+{
+    keyboard_key_event_t ev_none = { .vkey = -1, .pressed = false };
+
+    if (s->state == KEYBOARD_PS2_STATE_IGNORE) {
+        s->num_ignore--;
+        if (s->num_ignore == 0) {
+            s->state = KEYBOARD_PS2_STATE_NORMAL;
+        }
+        return ev_none;
+    }
+
+    assert(s->state & KEYBOARD_PS2_STATE_NORMAL);
+
+    /* Handle release / extended mode keys. */
+    switch (ps2_keyevent) {
+//    case KEYBOARD_PS2_EVENTCODE_RELEASE:
+//        s->state |= KEYBOARD_PS2_STATE_RELEASE_KEY;
+//        return ev_none;
+    case KEYBOARD_PS2_EVENTCODE_EXTENDED:
+        s->state |= KEYBOARD_PS2_STATE_EXTENDED_MODE;
+        return ev_none;
+    case KEYBOARD_PS2_EVENTCODE_EXTENDED_PAUSE:
+        s->state = KEYBOARD_PS2_STATE_IGNORE;
+        s->num_ignore = 5; /* Ignore the next 5 characters of pause seq. */
+        keyboard_key_event_t ev = { .vkey = VK_PAUSE, .pressed = true };
+        return ev;
+    }
+
+    /* Prepend 0xE0 to ps2 keycode if in extended mode. */
+    if (s->state & KEYBOARD_PS2_STATE_EXTENDED_MODE) {
+        ps2_keyevent = 0xE000 + (ps2_keyevent & 0xFF);
+        s->state &= ~KEYBOARD_PS2_STATE_EXTENDED_MODE;
+    }
+
+    int pressed = (0 == (ps2_keyevent & 0x80));
+    int16_t vkey = keycode_ps2_to_vkey_set1(ps2_keyevent & (~0x80));
+    if (vkey < 0) {
+        /* No associated vkey with this PS2 key. */
+        s->state = KEYBOARD_PS2_STATE_NORMAL;
+        return ev_none;
+    }
+
+    keyboard_key_event_t ev = { .vkey = vkey, .pressed = pressed };
+
+//    /* Set keystate according to press or release. */
+//    if (pressed) {
+//        /* Release event. */
+//        keyboard_key_event_t ev = { .vkey = vkey, .pressed = false };
+//        return ev;
+//    }
+//
+//    /* Press event. */
+//    keyboard_key_event_t ev = { .vkey = vkey, .pressed = true };
+    return ev;
+}
+
 /* ---------------------------------------------------------------------------------------------- */
 
 int
@@ -148,6 +206,7 @@ keyboard_init(struct keyboard_state *state, const ps_io_ops_t* ops,
 
     state->state = KEYBOARD_PS2_STATE_NORMAL;
     state->ops = *ops;
+    state->scanset = 2;
     state->handle_event_callback = handle_event_callback;
 
     /* Initialise the PS2 keyboard device. */
@@ -191,6 +250,9 @@ keyboard_init(struct keyboard_state *state, const ps_io_ops_t* ops,
 
     /* Set scanmode 2. */
     keyboard_set_scanmode(state, 2);
+
+    /* there may be some ACKs in the buffer */
+    //keyboard_flush(&state->ops);
     return 0;
 }
 
@@ -238,6 +300,10 @@ keyboard_poll_ps2_keyevent(struct keyboard_state *state)
         keyboard_key_event_t ev = { .vkey = -1, .pressed = false };
         return ev;
     }
+    assert(state->scanset == 1 || state->scanset == 2);
+    if (state->scanset == 1) {
+        return keyboard_state_push_ps2_keyevent_set1(state, ps2_read_data(&state->ops));
+    }
     return keyboard_state_push_ps2_keyevent(state, ps2_read_data(&state->ops));
 }
 
@@ -251,4 +317,59 @@ keyboard_poll_ps2_keyevents(struct keyboard_state *state, void *cookie)
             state->handle_event_callback(ev, cookie);
         }
     } while (ev.vkey != -1);
+}
+
+//static double dd = 1;
+//double keyboard_delay(int n) {
+//
+//    double d = 200.0 + dd;
+//    for (int i = 0; i<n * 1000; i++) {
+//        d = d + 10 *2.4/3.2;
+//    }
+//    dd = d;
+//    printf("delay %d", (int)d);
+//    return d;
+//}
+
+// jm--
+void
+keyboard_flush(ps_io_ops_t *ops)
+{
+     for (;;) {
+        printf("keyboard_flush() control=%x, \n", ps2_read_control_status(ops));
+        if (0 == (ps2_read_control_status(ops) & 0x1)) {
+            printf("keyboard_flush() is done\n");
+            break;
+        }
+        uint8_t c = ps2_read_data(ops);
+        printf("keyboard_flush %x\n", c);
+    }
+}
+
+// jm--
+int
+keyboard_detect_scanset(ps_io_ops_t *ops)
+{
+    uint8_t c1;
+    /* skip over "special bytes," e.g. see http://wiki.osdev.org/PS2_Keyboard */
+    do {
+        c1 = ps2_read_output(ops);
+        printf("keyboard_detect_scanset() flush: %x\n", c1);
+    } while (c1 == KEYBOARD_ACK
+          || c1 == KEYBOARD_RESEND
+          || c1 == KEYBOARD_RESET
+          || c1 == 0x00);
+    uint8_t c2 = ps2_read_output(ops);
+    printf("keyboard_detect_scanset() %x %x %x %x\n",
+            c1, c2, 0x80 + c1, 0x80 + c1 == c2);
+    if (0x80 + c1 == c2) {
+        return 1;
+    }
+    if (c2 == 0xF0) {
+        uint8_t c3 = ps2_read_output(ops);
+        if (c1 == c3) {
+            return 2;
+        }
+    }
+    return -1;
 }

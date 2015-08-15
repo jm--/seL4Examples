@@ -347,6 +347,7 @@ int16_t keycode_info_char_modifier(keycode_info_t *info, bool ctrl, bool shift);
 
 int16_t keycode_info_char(keycode_state_t *s, keycode_info_t *info);
 
+int16_t keycode_ps2_to_vkey_set1(uint32_t ps2_keycode);
 int16_t keycode_ps2_to_vkey(int32_t ps2_keycode);
 
 
