@@ -26,6 +26,8 @@
 #include <simple-default/simple-default.h>
 #endif
 
+#include "local_libplatsupport/keyboard_ps2.h"
+#include "local_libplatsupport/keyboard_chardev.h"
 
 typedef struct _chardev_t {
     /* platsupport char device */
@@ -35,63 +37,6 @@ typedef struct _chardev_t {
     /* endpoint cap - waiting for IRQ */
     vka_object_t ep;
 } chardev_t;
-
-
-//////////////////////////////////////////////////////
-/*  Types and prototypes are from
- *  keyboard_chardev.c and keyboard_ps2.h in the platsupport library.
- *  I guess one is not supposed to use them directly. :->
- */
-
-#define KEYBOARD_PS2_STATE_NORMAL 0x1
-#define KEYBOARD_PS2_STATE_IGNORE 0x2
-#define KEYBOARD_PS2_STATE_EXTENDED_MODE 0x4
-#define KEYBOARD_PS2_STATE_RELEASE_KEY 0x8
-#define KEYBOARD_PS2_EVENTCODE_RELEASE 0xF0
-#define KEYBOARD_PS2_EVENTCODE_EXTENDED 0xE0
-#define KEYBOARD_PS2_EVENTCODE_EXTENDED_PAUSE 0xE1
-
-typedef struct keycode_state {
-    bool keystate[256];
-
-    bool scroll_lock;
-    bool num_lock;
-    bool caps_lock;
-    bool led_state_changed;
-
-    /* Optional callback, called when a vkey has been pressed or released. */
-    void (*handle_keyevent_callback)(int16_t vkey, bool pressed, void *cookie);
-    /* Optional callback, called when a character has been typed. */
-    void (*handle_chartyped_callback)(int c, void *cookie);
-    /* Optional callback, called when num/scroll/caps lock LED state has changed. */
-    void (*handle_led_state_changed_callback)(void *cookie);
-
-} keycode_state_t;
-
-typedef struct keyboard_key_event {
-    int16_t vkey;
-    bool pressed;
-} keyboard_key_event_t;
-
-struct keyboard_state {
-    ps_io_ops_t ops;
-    int state;
-    int num_ignore;
-    void (*handle_event_callback)(keyboard_key_event_t ev, void *cookie);
-};
-
-static struct keyboard_state my_kb_state;
-static keycode_state_t my_kc_state;
-
-/* prototypes of platsupport internal functions */
-keyboard_key_event_t
-keyboard_poll_ps2_keyevent(struct keyboard_state *state);
-
-int16_t
-keycode_process_vkey_event_to_char (keycode_state_t *s,
-        int32_t vkey, bool pressed, void* cookie);
-
-//////////////////////////////////////////////////////
 
 
 /* memory management: Virtual Kernel Allocator (VKA) interface and VSpace */
@@ -187,40 +132,32 @@ get_irqhandler_cap(int irq, cspacepath_t* handler)
 
 
 static void
-init_keyboard_state () {
-    //mirroring platsupport's internal keyboard state; yikes
-    my_kb_state.state = KEYBOARD_PS2_STATE_NORMAL;
-    my_kb_state.ops = opsIO;   // keyboard.dev.ioops
-    my_kb_state.num_ignore = 0;
-    my_kb_state.handle_event_callback = NULL;
-
-    memset(&my_kc_state, 0, sizeof(keycode_state_t));
-    my_kc_state.num_lock = true;
-}
-
-
-static void
 flush_keyboard(struct ps_chardevice *device);
+
+
+static const int my_keyboard_irqs[] = {KEYBOARD_PS2_IRQ, -1};
+static const struct dev_defn my_keyboard_def = {
+        .id      = PC99_KEYBOARD_PS2,
+        .paddr   = 0,
+        .size    = 0,
+        .irqs    = my_keyboard_irqs,
+        .init_fn = &keyboard_cdev_init
+};
+
 
 static void
 init_keyboard(chardev_t* dev) {
     int n = 0;
-    ps_chardevice_t *ret;
+    int err = 0;
     do {
-        //ps_cdev_init() tries to set the keyboard to "scan code set 2"
-        //(unfortunately, my laptop and external usb keyboard refuse and
-        //operate in "scan code set 1" mode;
-        //I blame buggy "legacy PS2" mode in BIOS)
-        ret = ps_cdev_init(PC99_KEYBOARD_PS2, &opsIO, &dev->dev);
-        // The code to initialize the keyboard in platsupport
-        // does not return PS2_CONTROLLER_SELF_TEST_OK when a key is pressed
-        // before or during initialization or something?
+        //ret = ps_cdev_init(PC99_KEYBOARD_PS2, &opsIO, &dev->dev);
+        err = keyboard_cdev_init(&my_keyboard_def, &opsIO, &dev->dev);
         if (n++ == 100) {
             // We retry a couple of times before giving up.
             printf("Failed to initialize PS2 keyboard.\n");
             exit(EXIT_FAILURE);
         }
-    } while (ret == NULL);
+    } while (err);
 
     // Loop through all IRQs and get the one device needs to listen to
     // We currently assume there it only needs one IRQ.
@@ -236,15 +173,13 @@ init_keyboard(chardev_t* dev) {
     get_irqhandler_cap(irq, &dev->handler);
 
     // create endpoint
-    UNUSED int err = vka_alloc_async_endpoint(&vka, &dev->ep);
+    err = vka_alloc_async_endpoint(&vka, &dev->ep);
     assert(err == 0);
 
 
     /* Assign AEP to the IRQ handler. */
     err = seL4_IRQHandler_SetEndpoint(dev->handler.capPtr, dev->ep.cptr);
     assert(err == 0);
-
-    init_keyboard_state();
 
     //flush and ack keyboard
     flush_keyboard(&dev->dev);
@@ -264,14 +199,12 @@ init_keyboard(chardev_t* dev) {
 static int
 check_keyboard(struct ps_chardevice *device) {
     static int n = 0;
-    static const uint32_t PORT_STATUS = 0x64;
-    static const uint32_t PORT_DATA = 0x60;
 
-    ps_io_port_ops_t *port_ops = &my_kb_state.ops.io_port_ops;
+    ps_io_port_ops_t *port_ops = &opsIO.io_port_ops;
 
     //check status register
     uint32_t res = 0;
-    int error = ps_io_port_in(port_ops, PORT_STATUS, 1, &res);
+    int error = ps_io_port_in(port_ops, PS2_IOPORT_CONTROL, 1, &res);
     assert(!error);
     if ((res & 0x1) == 0) {
         //buffer is empty
@@ -280,7 +213,7 @@ check_keyboard(struct ps_chardevice *device) {
 
     //fetch one byte
     res = 0;
-    error = ps_io_port_in(port_ops, PORT_DATA, 1, &res);
+    error = ps_io_port_in(port_ops, PS2_IOPORT_DATA, 1, &res);
     assert(!error);
     printf("key: code = %3d = 0x%2x   (%d)\n", res, res, ++n);
     return res;
