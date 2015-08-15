@@ -81,9 +81,12 @@ ps2_send_keyboard_cmd_param(ps_io_ops_t *ops, uint8_t cmd, uint8_t param)
 
 /* ---------------------------------------------------------------------------------------------- */
 
+//jm--: code for scanset 1 cannot handle "print screen" key or similar keys
+//that is, keys that start with 0xE0 but then have more than one code following
 static keyboard_key_event_t
 keyboard_state_push_ps2_keyevent(struct keyboard_state *s, uint16_t ps2_keyevent)
 {
+    assert(s->scanset == 1 || s->scanset == 2);
     keyboard_key_event_t ev_none = { .vkey = -1, .pressed = false };
 
     if (s->state == KEYBOARD_PS2_STATE_IGNORE) {
@@ -99,70 +102,21 @@ keyboard_state_push_ps2_keyevent(struct keyboard_state *s, uint16_t ps2_keyevent
     /* Handle release / extended mode keys. */
     switch (ps2_keyevent) {
     case KEYBOARD_PS2_EVENTCODE_RELEASE:
-        s->state |= KEYBOARD_PS2_STATE_RELEASE_KEY;
-        return ev_none;
-    case KEYBOARD_PS2_EVENTCODE_EXTENDED:
-        s->state |= KEYBOARD_PS2_STATE_EXTENDED_MODE;
-        return ev_none;
-    case KEYBOARD_PS2_EVENTCODE_EXTENDED_PAUSE:
-        s->state = KEYBOARD_PS2_STATE_IGNORE;
-        s->num_ignore = 7; /* Ignore the next 7 characters of pause seq. */
-        keyboard_key_event_t ev = { .vkey = VK_PAUSE, .pressed = true };
-        return ev;
-    }
-
-    /* Prepend 0xE0 to ps2 keycode if in extended mode. */
-    if (s->state & KEYBOARD_PS2_STATE_EXTENDED_MODE) {
-        ps2_keyevent = 0xE000 + (ps2_keyevent & 0xFF);
-        s->state &= ~KEYBOARD_PS2_STATE_EXTENDED_MODE;
-    }
-
-    int16_t vkey = keycode_ps2_to_vkey(ps2_keyevent);
-    if (vkey < 0) {
-        /* No associated vkey with this PS2 key. */
-        s->state = KEYBOARD_PS2_STATE_NORMAL;
-        return ev_none;
-    }
-
-    /* Set keystate according to press or release. */
-    if (s->state & KEYBOARD_PS2_STATE_RELEASE_KEY) {
-        /* Release event. */
-        keyboard_key_event_t ev = { .vkey = vkey, .pressed = false };
-        s->state &= ~KEYBOARD_PS2_STATE_RELEASE_KEY;
-        return ev;
-    }
-
-    /* Press event. */
-    keyboard_key_event_t ev = { .vkey = vkey, .pressed = true };
-    return ev;
-}
-
-static keyboard_key_event_t
-keyboard_state_push_ps2_keyevent_set1(struct keyboard_state *s, uint16_t ps2_keyevent)
-{
-    keyboard_key_event_t ev_none = { .vkey = -1, .pressed = false };
-
-    if (s->state == KEYBOARD_PS2_STATE_IGNORE) {
-        s->num_ignore--;
-        if (s->num_ignore == 0) {
-            s->state = KEYBOARD_PS2_STATE_NORMAL;
+        if (s->scanset == 2) {
+            s->state |= KEYBOARD_PS2_STATE_RELEASE_KEY;
+            return ev_none;
         }
-        return ev_none;
-    }
-
-    assert(s->state & KEYBOARD_PS2_STATE_NORMAL);
-
-    /* Handle release / extended mode keys. */
-    switch (ps2_keyevent) {
-//    case KEYBOARD_PS2_EVENTCODE_RELEASE:
-//        s->state |= KEYBOARD_PS2_STATE_RELEASE_KEY;
-//        return ev_none;
+        break;
     case KEYBOARD_PS2_EVENTCODE_EXTENDED:
         s->state |= KEYBOARD_PS2_STATE_EXTENDED_MODE;
         return ev_none;
     case KEYBOARD_PS2_EVENTCODE_EXTENDED_PAUSE:
         s->state = KEYBOARD_PS2_STATE_IGNORE;
-        s->num_ignore = 5; /* Ignore the next 5 characters of pause seq. */
+        if (s->scanset == 2) {
+            s->num_ignore = 7; /* Ignore the next 7 characters of pause seq. */
+        } else {
+            s->num_ignore = 5; /* Ignore the next 5 characters of pause seq. */
+        }
         keyboard_key_event_t ev = { .vkey = VK_PAUSE, .pressed = true };
         return ev;
     }
@@ -173,27 +127,36 @@ keyboard_state_push_ps2_keyevent_set1(struct keyboard_state *s, uint16_t ps2_key
         s->state &= ~KEYBOARD_PS2_STATE_EXTENDED_MODE;
     }
 
-    int pressed = (0 == (ps2_keyevent & 0x80));
-    int16_t vkey = keycode_ps2_to_vkey_set1(ps2_keyevent & (~0x80));
+    int16_t vkey;
+    int pressed;
+    if (s->scanset == 1) {
+        pressed = (0 == (ps2_keyevent & 0x80));
+        ps2_keyevent &= (~0x80);
+        vkey = keycode_ps2_to_vkey_set1(ps2_keyevent);
+    } else {
+        pressed = true;
+        vkey = keycode_ps2_to_vkey_set2(ps2_keyevent);
+    }
+
     if (vkey < 0) {
         /* No associated vkey with this PS2 key. */
         s->state = KEYBOARD_PS2_STATE_NORMAL;
         return ev_none;
+    }
+
+    if (s->scanset == 2) {
+        /* Set keystate according to press or release. */
+        if (s->state & KEYBOARD_PS2_STATE_RELEASE_KEY) {
+            /* Release event. */
+            pressed = false;
+            s->state &= ~KEYBOARD_PS2_STATE_RELEASE_KEY;
+        }
     }
 
     keyboard_key_event_t ev = { .vkey = vkey, .pressed = pressed };
-
-//    /* Set keystate according to press or release. */
-//    if (pressed) {
-//        /* Release event. */
-//        keyboard_key_event_t ev = { .vkey = vkey, .pressed = false };
-//        return ev;
-//    }
-//
-//    /* Press event. */
-//    keyboard_key_event_t ev = { .vkey = vkey, .pressed = true };
     return ev;
 }
+
 
 /* ---------------------------------------------------------------------------------------------- */
 
@@ -299,10 +262,6 @@ keyboard_poll_ps2_keyevent(struct keyboard_state *state)
         /* No key events generated. */
         keyboard_key_event_t ev = { .vkey = -1, .pressed = false };
         return ev;
-    }
-    assert(state->scanset == 1 || state->scanset == 2);
-    if (state->scanset == 1) {
-        return keyboard_state_push_ps2_keyevent_set1(state, ps2_read_data(&state->ops));
     }
     return keyboard_state_push_ps2_keyevent(state, ps2_read_data(&state->ops));
 }

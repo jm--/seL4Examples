@@ -187,7 +187,7 @@ int16_t ps2_to_vkey_set1[PS2_MAX_KEYCODES_BASIC] = {
          by the keycode_ps2_to_vkey() helper function. This is done to reduce the memory footprint
          of this lookup table from 65535 to 256 bytes.
 */
-int16_t ps2_to_vkey[PS2_MAX_KEYCODES_BASIC] = {
+int16_t ps2_to_vkey_set2[PS2_MAX_KEYCODES_BASIC] = {
     [0 ... (PS2_MAX_KEYCODES_BASIC - 1)] = -1,
 
     [PS2_KEY_ESC] = VK_ESCAPE,
@@ -688,10 +688,10 @@ int16_t keycode_ps2_to_vkey_set1(uint32_t ps2_keycode)
 }
 
 int16_t
-keycode_ps2_to_vkey(int32_t ps2_keycode)
+keycode_ps2_to_vkey_set2(int32_t ps2_keycode)
 {
     if (ps2_keycode >= 0 && ps2_keycode < PS2_MAX_KEYCODES_BASIC) {
-        return ps2_to_vkey[ps2_keycode];
+        return ps2_to_vkey_set2[ps2_keycode];
     }
     /* Special case extended characters to avoid a large lookup table. */
     switch (ps2_keycode) {
