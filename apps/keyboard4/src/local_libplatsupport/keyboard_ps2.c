@@ -15,13 +15,23 @@
 #include <sel4/sel4.h>
 #include <assert.h>
 
+static double
+ps2_delay(int n) {
+    printf("ps2_delay %d\n", n);
+    double d = 200.0 + n;
+    for (int i = 0; i < n; i++) {
+        d = d + 10 * d/3.2;
+    }
+    return d;
+}
+
 static void
 ps2_single_control(ps_io_ops_t *ops, int8_t byte)
 {
     ps_io_port_out(&ops->io_port_ops, PS2_IOPORT_CONTROL, 1, byte);
 }
 
-static void
+UNUSED static void
 ps2_dual_control(ps_io_ops_t *ops, int8_t byte1, int8_t byte2)
 {
     ps_io_port_out(&ops->io_port_ops, PS2_IOPORT_CONTROL, 1, byte1);
@@ -77,6 +87,37 @@ ps2_send_keyboard_cmd_param(ps_io_ops_t *ops, uint8_t cmd, uint8_t param)
         ps2_write_output(ops, cmd);
         ps2_write_output(ops, param);
     } while (ps2_read_output(ops) != KEYBOARD_ACK);
+}
+
+//jm--
+static void
+ps_init_commandbyte(ps_io_ops_t *ops) {
+    int i = 0;
+    int8_t config;
+    int8_t config2;
+
+    /* Read command byte: current value is placed in port 60h. */
+    ps2_single_control(ops, PS2_READ_CMD_BYTE);
+    config = ps2_read_output(ops);
+    printf("bCR=%x ", config);
+    /* Enable IRQs and disable translation (IRQ bits 0, 1, translation 6). */
+    config |= 0x1;
+    config &= 0xBF;
+    do {
+        /* Write command byte: next byte written to port 60h is
+           placed in command register. */
+        ps2_single_control(ops, PS2_WRITE_CMD_BYTE);
+        ps2_delay(1 << i);
+        ps2_write_output(ops, config);
+        //re-read
+        ps2_delay(1 << i);
+        ps2_single_control(ops, PS2_READ_CMD_BYTE);
+        config2 = ps2_read_output(ops);
+        printf("aCR=%x/%d ", config2, i);
+        fflush(stdout);
+    } while (config2 != config && i++ < 24);
+    printf("ps_init_commandbyte() - done ");
+    fflush(stdout);
 }
 
 /* ---------------------------------------------------------------------------------------------- */
@@ -181,19 +222,17 @@ keyboard_init(struct keyboard_state *state, const ps_io_ops_t* ops,
     /* Flush the output buffer. */
     ps2_read_data(&state->ops);
 
-    /* Enable IRQs and disable translation (IRQ bits 0, 1, translation 6). */
-    ps2_single_control(&state->ops, PS2_READ_CMD_BYTE);
-    uint8_t config = ps2_read_output(&state->ops);
-    config |= 0x1;
-    config &= 0xBF;
-    ps2_dual_control(&state->ops, PS2_WRITE_CMD_BYTE, config);
-
-    /* Run a controller self test. */
+    /* Run a controller self test. Weird, I have to do the self test
+     * first because it clobbers my command byte.
+     */
     ps2_single_control(&state->ops, PS2_CMD_CONTROLLER_SELF_TEST);
     uint8_t res = ps2_read_output(&state->ops);
     if (res != PS2_CONTROLLER_SELF_TEST_OK) {
         return -1;
     }
+
+    /* Enable IRQs and disable translation (IRQ bits 0, 1, translation 6). */
+    ps_init_commandbyte(&state->ops);
 
     /* Run keyboard interface test. */
     ps2_single_control(&state->ops, PS2_CMD_KEYBOARD_INTERFACE_TEST);
